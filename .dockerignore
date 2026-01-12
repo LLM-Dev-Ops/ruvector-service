@@ -18,4 +18,3 @@ tests
 jest.config.js
 jest.integration.config.js
 .eslintrc.js
-tsconfig.json

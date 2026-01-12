@@ -1,0 +1,33 @@
+# Dependencies (but keep package-lock.json for npm ci)
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Test coverage
+coverage/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Tests
+tests/
+
+# Plans
+plans/
+.claude-flow/
