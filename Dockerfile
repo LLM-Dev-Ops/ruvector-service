@@ -52,36 +52,47 @@ RUN chown -R nodejs:nodejs /app
 # Switch to non-root user
 USER nodejs
 
-# SPARC: Environment-driven configuration
+# Environment-driven configuration for Cloud Run
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
 ENV LOG_LEVEL=info
 
-# SPARC: Default RuvVector connection
-ENV RUVVECTOR_HOST=localhost
-ENV RUVVECTOR_PORT=6379
+# Default RuvVector connection (optional for plans-only deployment)
+ENV RUVVECTOR_SERVICE_URL=http://localhost:6379
 ENV RUVVECTOR_TIMEOUT=30000
 ENV RUVVECTOR_POOL_SIZE=10
 
-# SPARC: Circuit breaker defaults
+# Database configuration (Cloud SQL PostgreSQL)
+# These should be overridden by Cloud Run environment variables
+ENV RUVECTOR_DB_HOST=localhost
+ENV RUVECTOR_DB_PORT=5432
+ENV RUVECTOR_DB_NAME=ruvector-postgres
+ENV RUVECTOR_DB_USER=postgres
+ENV RUVECTOR_DB_PASSWORD=
+ENV RUVECTOR_DB_MAX_CONNECTIONS=20
+ENV RUVECTOR_DB_IDLE_TIMEOUT=30000
+ENV RUVECTOR_DB_CONNECTION_TIMEOUT=10000
+ENV RUVECTOR_DB_SSL=false
+
+# Circuit breaker defaults
 ENV CIRCUIT_BREAKER_THRESHOLD=5
 ENV CIRCUIT_BREAKER_TIMEOUT=30000
 ENV CIRCUIT_BREAKER_RESET=60000
 
-# SPARC: Metrics defaults
+# Metrics defaults
 ENV METRICS_ENABLED=true
 ENV METRICS_PORT=9090
 
-# SPARC: Graceful shutdown
+# Graceful shutdown
 ENV SHUTDOWN_TIMEOUT=30000
 
-# Expose service port
-EXPOSE 3000
+# Expose service port (Cloud Run uses 8080)
+EXPOSE 8080
 
-# SPARC: Liveness probe - GET /health
-# Startup time < 5 seconds per SPARC spec
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+# Liveness probe - GET /health with database check
+# Startup time < 10 seconds for database connection
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 # SPARC: Single process deployment
 CMD ["node", "dist/index.js"]

@@ -10,6 +10,7 @@ import {
   ruvvectorActiveConnections
 } from './utils/metrics';
 import { VectorClient } from './clients/VectorClient';
+import { DatabaseClient } from './clients/DatabaseClient';
 
 // Middleware
 import { validateRequiredHeaders, validateRequest, ingestSchema, querySchema, simulateSchema } from './middleware/validation';
@@ -23,6 +24,12 @@ import { graphHandler } from './handlers/graph';
 import { predictHandler } from './handlers/predict';
 import { metadataHandler } from './handlers/metadata';
 import { healthHandler, readyHandler } from './handlers/health';
+import {
+  createPlanHandler,
+  getPlanHandler,
+  listPlansHandler,
+  deletePlanHandler,
+} from './handlers/plans';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -46,9 +53,9 @@ function metricsMiddleware(req: Request, res: Response, next: NextFunction): voi
 
 /**
  * Initialize Express application with all middleware and routes
- * SPARC compliant: Three endpoints maximum
+ * SPARC compliant with Cloud Run plans API
  */
-function createApp(vectorClient: VectorClient): Application {
+function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Application {
   const app = express();
 
   // Basic middleware
@@ -58,8 +65,10 @@ function createApp(vectorClient: VectorClient): Application {
   app.use(metricsMiddleware);
 
   // Health endpoints (no authentication required per SPARC)
-  // SPARC: GET /health - Liveness probe
-  app.get('/health', healthHandler);
+  // GET /health - Liveness probe with database check
+  app.get('/health', (req, res, next) => {
+    healthHandler(req, res, dbClient).catch(next);
+  });
 
   // SPARC: GET /ready - Readiness probe
   app.get('/ready', (req, res, next) => {
@@ -76,7 +85,34 @@ function createApp(vectorClient: VectorClient): Application {
     res.end(await register.metrics());
   });
 
-  // API endpoints (require x-correlation-id and x-entitlement-context headers)
+  // ============================================================================
+  // Plans API - /v1/plans endpoints for Cloud Run
+  // ============================================================================
+
+  // POST /v1/plans - Store a plan
+  app.post('/v1/plans', (req, res, next) => {
+    createPlanHandler(req, res, dbClient).catch(next);
+  });
+
+  // GET /v1/plans/:id - Retrieve a plan by ID
+  app.get('/v1/plans/:id', (req, res, next) => {
+    getPlanHandler(req, res, dbClient).catch(next);
+  });
+
+  // GET /v1/plans - List plans (with optional org_id and limit query params)
+  app.get('/v1/plans', (req, res, next) => {
+    listPlansHandler(req, res, dbClient).catch(next);
+  });
+
+  // DELETE /v1/plans/:id - Delete a plan
+  app.delete('/v1/plans/:id', (req, res, next) => {
+    deletePlanHandler(req, res, dbClient).catch(next);
+  });
+
+  // ============================================================================
+  // Legacy API endpoints (require x-correlation-id and x-entitlement-context headers)
+  // ============================================================================
+
   // SPARC: POST /ingest - Accept normalized events
   app.post(
     '/ingest',
@@ -141,7 +177,23 @@ function createApp(vectorClient: VectorClient): Application {
  * Start the HTTP server
  * SPARC: Service listen port from PORT env var, default 3000
  */
-async function startServer(): Promise<Server> {
+async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient }> {
+  // Initialize DatabaseClient for PostgreSQL
+  const dbClient = new DatabaseClient({
+    host: config.database.host,
+    port: config.database.port,
+    database: config.database.name,
+    user: config.database.user,
+    password: config.database.password,
+    maxConnections: config.database.maxConnections,
+    idleTimeoutMs: config.database.idleTimeoutMs,
+    connectionTimeoutMs: config.database.connectionTimeoutMs,
+    ssl: config.database.ssl,
+  });
+
+  // Initialize database (create tables if needed)
+  await dbClient.initialize();
+
   // Initialize VectorClient with SPARC-compliant config
   const vectorClient = new VectorClient({
     serviceUrl: config.ruvVector.serviceUrl,
@@ -155,19 +207,29 @@ async function startServer(): Promise<Server> {
     },
   });
 
-  // Establish connection to RuvVector
-  await vectorClient.connect();
+  // Establish connection to RuvVector (optional - may not be available)
+  try {
+    await vectorClient.connect();
+  } catch (error) {
+    logger.warn({ error }, 'VectorClient connection failed - continuing without vector operations');
+  }
 
   // Create Express app
-  const app = createApp(vectorClient);
+  const app = createApp(vectorClient, dbClient);
 
   // Start HTTP server
   const server = app.listen(config.port, () => {
     const connectionInfo = vectorClient.getConnectionInfo();
+    const dbStats = dbClient.getPoolStats();
     logger.info(
       {
         port: config.port,
         ruvvectorServiceUrl: connectionInfo.serviceUrl,
+        database: {
+          host: config.database.host,
+          name: config.database.name,
+          poolStats: dbStats,
+        },
         service: 'ruvvector-service',
       },
       'Server started successfully'
@@ -179,14 +241,14 @@ async function startServer(): Promise<Server> {
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
 
-  return server;
+  return { server, dbClient };
 }
 
 /**
  * Graceful shutdown handler
  * SPARC: Drain connections within 30s
  */
-function setupGracefulShutdown(server: Server): void {
+function setupGracefulShutdown(server: Server, dbClient: DatabaseClient): void {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Received shutdown signal, starting graceful shutdown');
 
@@ -205,6 +267,9 @@ function setupGracefulShutdown(server: Server): void {
       await new Promise<void>((resolve) => {
         server.on('close', resolve);
       });
+
+      // Close database connections
+      await dbClient.close();
 
       clearTimeout(shutdownTimeout);
       logger.info('Graceful shutdown completed');
@@ -243,8 +308,8 @@ async function main(): Promise<void> {
       'Starting ruvvector-service'
     );
 
-    const server = await startServer();
-    setupGracefulShutdown(server);
+    const { server, dbClient } = await startServer();
+    setupGracefulShutdown(server, dbClient);
   } catch (error) {
     logger.fatal({ error }, 'Failed to start server');
     process.exit(1);

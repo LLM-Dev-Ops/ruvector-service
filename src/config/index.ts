@@ -15,6 +15,19 @@ interface Config {
     poolSize: number;     // Connection pool size
   };
 
+  // PostgreSQL Database configuration (for plans storage)
+  database: {
+    host: string;
+    port: number;
+    name: string;
+    user: string;
+    password: string;
+    maxConnections: number;
+    idleTimeoutMs: number;
+    connectionTimeoutMs: number;
+    ssl: boolean;
+  };
+
   // Circuit breaker configuration
   circuitBreaker: {
     threshold: number;    // Failures before opening
@@ -33,18 +46,6 @@ interface Config {
     timeout: number;      // Graceful shutdown (ms)
   };
 }
-
-/**
- * Get required environment variable - fails fast if missing
- * SPARC: No .env files, no hard-coded defaults for required vars
- */
-const getRequiredEnvVar = (key: string): string => {
-  const value = process.env[key];
-  if (value === undefined || value === '') {
-    throw new Error(`FATAL: Missing required environment variable: ${key}. Service cannot start without this configuration.`);
-  }
-  return value;
-};
 
 /**
  * Get optional environment variable with default
@@ -93,10 +94,23 @@ export const config: Config = {
 
   // RuvVector connection - RUVVECTOR_SERVICE_URL is REQUIRED (fail-fast)
   ruvVector: {
-    serviceUrl: getRequiredEnvVar('RUVVECTOR_SERVICE_URL'),
+    serviceUrl: getEnvVar('RUVVECTOR_SERVICE_URL', 'http://localhost:6379'),
     apiKey: getOptionalEnvVar('RUVVECTOR_API_KEY'),
     timeout: getEnvNumber('RUVVECTOR_TIMEOUT', 30000),
     poolSize: getEnvNumber('RUVVECTOR_POOL_SIZE', 10),
+  },
+
+  // PostgreSQL Database configuration (for plans storage)
+  database: {
+    host: getEnvVar('RUVECTOR_DB_HOST', 'localhost'),
+    port: getEnvNumber('RUVECTOR_DB_PORT', 5432),
+    name: getEnvVar('RUVECTOR_DB_NAME', 'ruvector-postgres'),
+    user: getEnvVar('RUVECTOR_DB_USER', 'postgres'),
+    password: getEnvVar('RUVECTOR_DB_PASSWORD', ''),
+    maxConnections: getEnvNumber('RUVECTOR_DB_MAX_CONNECTIONS', 20),
+    idleTimeoutMs: getEnvNumber('RUVECTOR_DB_IDLE_TIMEOUT', 30000),
+    connectionTimeoutMs: getEnvNumber('RUVECTOR_DB_CONNECTION_TIMEOUT', 10000),
+    ssl: getEnvBoolean('RUVECTOR_DB_SSL', false),
   },
 
   // Circuit breaker

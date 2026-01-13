@@ -223,3 +223,40 @@ export interface PredictionResult {
   confidence: number;               // Confidence score [0, 1]
   executionTime: number;            // Milliseconds
 }
+
+// ============================================================================
+// Plans Storage Interfaces (Cloud Run API)
+// ============================================================================
+
+export interface RuvectorPlan {
+  id: string;                       // UUID from planner
+  type: 'plan';
+  intent: string;                   // Original user intent/query
+  plan: object;                     // Full plan JSON from planner
+  created_at: string;               // ISO timestamp
+  org_id: string;                   // Organization ID
+  user_id: string;                  // User ID
+  checksum: string;                 // SHA-256 of plan content
+}
+
+export interface CreatePlanRequest {
+  id: string;
+  intent: string;
+  plan: object;
+  org_id: string;
+  user_id: string;
+  checksum: string;
+}
+
+export interface CreatePlanResponse {
+  success: boolean;
+  id: string;
+}
+
+export interface ListPlansResponse {
+  plans: RuvectorPlan[];
+}
+
+export interface DeletePlanResponse {
+  success: boolean;
+}

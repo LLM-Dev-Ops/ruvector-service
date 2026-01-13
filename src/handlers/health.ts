@@ -1,22 +1,49 @@
 import { Request, Response } from 'express';
 import { HealthResponse, ReadyResponse } from '../types';
 import { VectorClient } from '../clients/VectorClient';
+import { DatabaseClient } from '../clients/DatabaseClient';
 import logger from '../utils/logger';
 
 /**
  * Handler for GET /health
- * SPARC: Basic liveness probe
+ * Includes database connectivity check for Cloud Run
  *
- * Returns 200 when service is running
+ * Returns 200 when service and database are healthy
  */
-export function healthHandler(_req: Request, res: Response): void {
-  // SPARC: RETURN success(200, { status: 'healthy', timestamp: NOW() })
-  const response: HealthResponse = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-  };
+export async function healthHandler(
+  _req: Request,
+  res: Response,
+  dbClient?: DatabaseClient
+): Promise<void> {
+  try {
+    // Check database connectivity if client is provided
+    if (dbClient) {
+      const dbHealthy = await dbClient.ping();
+      if (!dbHealthy) {
+        logger.warn('Health check failed - database not connected');
+        res.status(503).json({
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          database: 'disconnected',
+        });
+        return;
+      }
+    }
 
-  res.status(200).json(response);
+    const response: HealthResponse = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error({ error }, 'Health check failed');
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: 'Health check failed',
+    });
+  }
 }
 
 /**
