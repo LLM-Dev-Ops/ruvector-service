@@ -42,3 +42,9 @@ pids/
 *.pid
 *.seed
 *.pid.lock
+
+# Claude Code / Claude Flow
+.claude/
+.claude-flow/
+.mcp.json
+CLAUDE.md
