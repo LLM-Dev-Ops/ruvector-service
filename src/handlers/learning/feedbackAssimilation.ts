@@ -25,6 +25,8 @@ import {
 } from '../../types';
 import logger from '../../utils/logger';
 import { getOrCreateCorrelationId } from '../../utils/correlation';
+import { getSignalTypeForDecision, validateEventEmission } from '../../types/signals';
+import { guardAgainstMutation } from '../../guards/immutability';
 
 // ============================================================================
 // Type Definitions
@@ -229,11 +231,29 @@ export function normalizeFeedback(
  * Emit learning event to database (append-only)
  * Uses learning_events table for consistency with approvals handler
  * Returns the event ID
+ *
+ * MEMORY LAYER HARDENING:
+ * - Validates signal type before emission
+ * - Guards against any mutation operations
+ * - Enforces append-only semantics
  */
 export async function emitLearningEvent(
   event: FeedbackAssimilationEvent,
   dbClient: DatabaseClient
 ): Promise<string> {
+  // MEMORY LAYER: Validate event emission before proceeding
+  validateEventEmission({
+    decision_type: event.decision_type,
+    source_type: 'feedback_assimilation',
+  });
+
+  // Get and log the signal type being emitted
+  const signalType = getSignalTypeForDecision(event.decision_type);
+  logger.debug(
+    { signalType, decision_type: event.decision_type },
+    'Emitting feedback assimilation signal'
+  );
+
   // Check for duplicate event via inputs_hash (idempotency)
   const existingResult = await dbClient.query(
     `SELECT id FROM learning_events
@@ -252,15 +272,20 @@ export async function emitLearningEvent(
 
   const eventId = uuidv4();
 
-  // Append-only INSERT (never UPDATE or DELETE)
-  // Map to learning_events table schema
-  await dbClient.query(
-    `INSERT INTO learning_events (
+  // Build the query
+  const query = `INSERT INTO learning_events (
       id, agent_id, agent_version, decision_type, inputs_hash,
       outputs, confidence, constraints_applied,
       source_id, source_type, created_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`;
+
+  // MEMORY LAYER: Guard against mutation (this query is safe, but we verify anyway)
+  guardAgainstMutation(query);
+
+  // Append-only INSERT (never UPDATE or DELETE)
+  // Map to learning_events table schema
+  await dbClient.query(query,
     [
       eventId,
       event.agent_id,

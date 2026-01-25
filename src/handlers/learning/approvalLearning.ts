@@ -21,6 +21,8 @@ import { DatabaseClient } from '../../clients/DatabaseClient';
 import { DecisionRecord } from '../../types';
 import logger from '../../utils/logger';
 import { getOrCreateCorrelationId } from '../../utils/correlation';
+import { getSignalTypeForDecision, validateEventEmission } from '../../types/signals';
+import { guardAgainstMutation } from '../../guards/immutability';
 
 /**
  * Learning Decision Event structure
@@ -105,6 +107,11 @@ export function computeInputsHash(inputs: Record<string, unknown>): string {
  * Emit learning decision event via append-only INSERT
  * Never performs UPDATE or DELETE operations
  *
+ * MEMORY LAYER HARDENING:
+ * - Validates signal type before emission
+ * - Guards against any mutation operations
+ * - Enforces append-only semantics
+ *
  * @param event - Learning decision event to emit
  * @param dbClient - Database client for append-only writes
  */
@@ -112,15 +119,32 @@ async function emitLearningDecisionEvent(
   event: LearningDecisionEvent,
   dbClient: DatabaseClient
 ): Promise<void> {
-  // Append-only INSERT with ON CONFLICT DO NOTHING for idempotency
-  await dbClient.query(
-    `INSERT INTO learning_events (
+  // MEMORY LAYER: Validate event emission before proceeding
+  validateEventEmission({
+    decision_type: event.decision_type,
+    source_type: 'approval_learning',
+  });
+
+  // Get and log the signal type being emitted
+  const signalType = getSignalTypeForDecision(event.decision_type);
+  logger.debug(
+    { eventId: event.id, signalType, decision_type: event.decision_type },
+    'Emitting learning signal'
+  );
+
+  // Build the query
+  const query = `INSERT INTO learning_events (
       id, agent_id, agent_version, decision_type, source_id,
       outputs, inputs_hash, confidence, constraints_applied, source_type, created_at
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    ON CONFLICT (inputs_hash) DO NOTHING`,
-    [
+    ON CONFLICT (inputs_hash) DO NOTHING`;
+
+  // MEMORY LAYER: Guard against mutation (this query is safe, but we verify anyway)
+  guardAgainstMutation(query);
+
+  // Append-only INSERT with ON CONFLICT DO NOTHING for idempotency
+  await dbClient.query(query, [
       event.id,
       event.agent_id,
       event.agent_version,

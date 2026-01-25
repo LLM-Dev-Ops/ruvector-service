@@ -12,6 +12,11 @@ import {
 import { VectorClient } from './clients/VectorClient';
 import { DatabaseClient } from './clients/DatabaseClient';
 
+// Startup Hardening
+import { runStartupAssertions, verifyStorageHealth } from './startup';
+import { configureLatencyBudget, learningLatencyMiddleware } from './middleware/latencyBudget';
+import { assertHistoricalDataIntegrity } from './guards/immutability';
+
 // Middleware
 import { validateRequiredHeaders, validateRequest, ingestSchema, querySchema, simulateSchema } from './middleware/validation';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
@@ -185,15 +190,18 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
 
   // ============================================================================
   // Learning Signal Agents API - PROMPT 0 Compliant
+  // Memory Layer Hardening: Latency budget enforcement on all learning endpoints
   // ============================================================================
 
   // POST /learning/learn - Approval Learning Agent (CLI-invokable)
-  app.post('/learning/learn', (req, res, next) => {
+  // Emits ONLY: learning_update_signal
+  app.post('/learning/learn', learningLatencyMiddleware, (req, res, next) => {
     createApprovalLearningHandler(req, res, dbClient).catch(next);
   });
 
   // POST /learning/assimilate - Feedback Assimilation Agent (CLI-invokable)
-  app.post('/learning/assimilate', (req, res, next) => {
+  // Emits ONLY: feedback_assimilation_signal
+  app.post('/learning/assimilate', learningLatencyMiddleware, (req, res, next) => {
     createFeedbackAssimilationHandler(req, res, dbClient).catch(next);
   });
 
@@ -295,8 +303,23 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
 /**
  * Start the HTTP server
  * SPARC: Service listen port from PORT env var, default 3000
+ *
+ * MEMORY LAYER HARDENING:
+ * 1. Assert all env vars
+ * 2. Verify storage + index health
+ * 3. Crash on failure
  */
 async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient }> {
+  // ============================================================================
+  // STARTUP HARDENING PHASE 1: Environment Assertions
+  // CRASHES on failure in production
+  // ============================================================================
+  const { maxLatencyMs } = runStartupAssertions();
+  configureLatencyBudget(maxLatencyMs);
+
+  // ============================================================================
+  // STARTUP HARDENING PHASE 2: Database Initialization
+  // ============================================================================
   // Initialize DatabaseClient for PostgreSQL
   const dbClient = new DatabaseClient({
     host: config.database.host,
@@ -312,6 +335,23 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
 
   // Initialize database (create tables if needed)
   await dbClient.initialize();
+
+  // ============================================================================
+  // STARTUP HARDENING PHASE 3: Storage Health Verification
+  // CRASHES on failure in production
+  // ============================================================================
+  await verifyStorageHealth(dbClient);
+
+  // ============================================================================
+  // STARTUP HARDENING PHASE 4: Historical Data Integrity Check
+  // ============================================================================
+  const integrityResult = await assertHistoricalDataIntegrity(dbClient);
+  if (!integrityResult.valid) {
+    logger.warn(
+      { issues: integrityResult.issues },
+      'Historical data integrity issues detected'
+    );
+  }
 
   // Initialize VectorClient with SPARC-compliant config
   const vectorClient = new VectorClient({

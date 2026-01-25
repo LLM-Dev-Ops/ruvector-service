@@ -25,9 +25,9 @@ steps:
       - '--platform=managed'
       - '--allow-unauthenticated'
       - '--memory=256Mi'
-      - '--set-env-vars=NODE_ENV=production,PORT=8080,LOG_LEVEL=info'
+      - '--set-env-vars=NODE_ENV=production,LOG_LEVEL=info,MAX_LATENCY_MS=2000,RUVVECTOR_DB_SSL=true'
       - '--set-secrets=RUVVECTOR_DB_HOST=RUVECTOR_DB_HOST:latest,RUVVECTOR_DB_PORT=RUVECTOR_DB_PORT:latest,RUVVECTOR_DB_NAME=RUVECTOR_DB_NAME:latest,RUVVECTOR_DB_USER=RUVECTOR_DB_USER:latest,RUVVECTOR_DB_PASSWORD=RUVECTOR_DB_PASSWORD:latest'
-      - '--add-cloudsql-instances=ruv-cloud:us-central1:ruvector-postgres'
+      - '--add-cloudsql-instances=agentics-dev:us-central1:ruvector-postgres'
     id: 'Deploy'
     waitFor: ['Push']
 
