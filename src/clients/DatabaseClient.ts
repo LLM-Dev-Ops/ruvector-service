@@ -161,9 +161,23 @@ export class DatabaseClient {
           approved BOOLEAN NOT NULL,
           confidence_adjustment DOUBLE PRECISION,
           reward DOUBLE PRECISION NOT NULL,
+          advisory BOOLEAN NOT NULL DEFAULT FALSE,
           timestamp TIMESTAMPTZ NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+      `);
+
+      // Add advisory column if it doesn't exist (migration for existing tables)
+      await this.pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'approvals' AND column_name = 'advisory'
+          ) THEN
+            ALTER TABLE approvals ADD COLUMN advisory BOOLEAN NOT NULL DEFAULT FALSE;
+          END IF;
+        END $$;
       `);
 
       await this.pool.query(`
@@ -172,6 +186,23 @@ export class DatabaseClient {
 
       await this.pool.query(`
         CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approvals(created_at DESC)
+      `);
+
+      // Unique index for idempotency: only one non-advisory approval per decision
+      // This prevents duplicate plan_approved event emissions
+      await this.pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_decision_non_advisory
+        ON approvals(decision_id) WHERE advisory = false
+      `);
+
+      // Index for efficient filtering of non-advisory approvals (used by /events/decisions)
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_approvals_advisory ON approvals(advisory)
+      `);
+
+      // Composite index for ordered event retrieval (created_at, id) as required
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_approvals_created_at_id ON approvals(created_at ASC, id ASC)
       `);
 
       // Create learning_weights table for storing edge weights

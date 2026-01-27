@@ -31,6 +31,7 @@ export interface DecisionEventPayload {
   confidence?: string;
   reward?: number;
   reviewer_outcome?: string;
+  advisory?: boolean;
   [key: string]: unknown;
 }
 
@@ -241,6 +242,8 @@ export async function listDecisionEventsHandler(
     }
 
     // Query for plan_approved/plan_rejected events from approvals table
+    // NOTE: plan_approved events are ONLY emitted for non-advisory approvals (advisory=false)
+    // This ensures only finalized approvals trigger downstream execution
     if (includeApproved || includeRejected || includeDeferred) {
       let approvalsQuery = `
         SELECT
@@ -249,6 +252,7 @@ export async function listDecisionEventsHandler(
           a.approved,
           a.reward,
           a.confidence_adjustment,
+          a.advisory,
           a.created_at as timestamp,
           d.objective,
           d.recommendation
@@ -260,11 +264,14 @@ export async function listDecisionEventsHandler(
       const conditions: string[] = [];
 
       // Filter by approval status based on requested event types
+      // For plan_approved: only include non-advisory approvals (advisory=false)
       const approvalFilters: string[] = [];
-      if (includeApproved) approvalFilters.push('a.approved = true');
+      if (includeApproved) approvalFilters.push('(a.approved = true AND a.advisory = false)');
       if (includeRejected) approvalFilters.push('a.approved = false');
 
       if (approvalFilters.length > 0 && approvalFilters.length < 2) {
+        conditions.push(`(${approvalFilters.join(' OR ')})`);
+      } else if (approvalFilters.length === 2) {
         conditions.push(`(${approvalFilters.join(' OR ')})`);
       }
 
@@ -292,6 +299,7 @@ export async function listDecisionEventsHandler(
         approved: boolean;
         reward: number;
         confidence_adjustment: number | null;
+        advisory: boolean;
         timestamp: Date;
         objective: string;
         recommendation: string;
@@ -299,19 +307,22 @@ export async function listDecisionEventsHandler(
 
       for (const row of approvalsResult.rows) {
         const eventType = mapApprovalToEventType(row.approved);
+        const eventTimestamp = new Date(row.timestamp).toISOString();
         events.push({
           id: buildEventId(eventType, row.id, row.timestamp),
           type: eventType,
-          timestamp: new Date(row.timestamp).toISOString(),
+          timestamp: eventTimestamp,
           payload: {
             plan_id: row.decision_id,
             decision_id: row.decision_id,
             simulation_id: row.decision_id, // Alias for execution engine compatibility
+            timestamp: eventTimestamp,      // Required: timestamp in payload for execution engine
             objective: row.objective,
             recommendation: row.recommendation,
             reward: row.reward,
             confidence_adjustment: row.confidence_adjustment,
             reviewer_outcome: row.approved ? 'approved' : 'rejected',
+            advisory: row.advisory,         // Required: advisory flag (false for execution-triggering events)
           },
         });
       }

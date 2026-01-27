@@ -1,0 +1,33 @@
+{
+  "id": "decision-94a22ed8-v2",
+  "plan_id": "94a22ed8-a712-44f6-b929-0dfe51b17095",
+  "simulation_id": "94a22ed8-a712-44f6-b929-0dfe51b17095",
+
+  "command": "agentics simulate run 94a22ed8-a712-44f6-b929-0dfe51b17095",
+
+  "objective": "Execute baseline cost test",
+  "recommendation": "PROCEED",
+  "confidence": "HIGH",
+
+  "raw_output_hash": "sha256:bootstrap-decision-hash",
+
+  "signals": {
+    "financial": "low_cost_neutral_roi",
+    "risk": "low_operational_risk",
+    "complexity": "low_single_simulation"
+  },
+
+  "embedding_text": "Baseline cost simulation approved for execution. Low financial impact. Low risk. Low complexity.",
+
+  "graph_relations": {
+    "objective_to_repos": [
+      "baseline-cost-test -> agentics-simulation-engine"
+    ],
+    "repos_to_signals": {
+      "agentics-simulation-engine": ["financial", "risk", "complexity"]
+    },
+    "signals_to_recommendation": [
+      "financial+risk+complexity -> PROCEED"
+    ]
+  }
+}

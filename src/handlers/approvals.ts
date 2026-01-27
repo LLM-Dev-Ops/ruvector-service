@@ -21,6 +21,7 @@ export const createApprovalSchema = z.object({
   decision_id: z.string().min(1),           // Accept any string ID format
   approved: z.boolean(),
   confidence_adjustment: z.number().min(-1).max(1).optional(),
+  advisory: z.boolean().optional().default(false),  // Advisory approvals don't trigger execution
   timestamp: z.string().optional(),
 });
 
@@ -79,6 +80,7 @@ export async function createApprovalHandler(
       decision_id,
       approved,
       confidence_adjustment,
+      advisory,
       timestamp,
     } = validatedData;
 
@@ -113,11 +115,47 @@ export async function createApprovalHandler(
     const eventTimestamp = timestamp || new Date().toISOString();
     const now = new Date().toISOString();
 
-    await dbClient.query(
-      `INSERT INTO approvals (id, decision_id, approved, confidence_adjustment, reward, timestamp, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [approvalId, decision_id, approved, confidence_adjustment || null, adjustedReward, eventTimestamp, now]
+    // Insert approval with idempotency protection for non-advisory approvals
+    // Only one non-advisory approval per decision is allowed (triggers plan_approved event)
+    // Advisory approvals can be added multiple times (for review tracking without execution)
+    const insertResult = await dbClient.query(
+      `INSERT INTO approvals (id, decision_id, approved, confidence_adjustment, reward, advisory, timestamp, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (decision_id) WHERE advisory = false
+       DO NOTHING
+       RETURNING id`,
+      [approvalId, decision_id, approved, confidence_adjustment || null, adjustedReward, advisory, eventTimestamp, now]
     );
+
+    // Check if insert was skipped due to existing non-advisory approval
+    if (!advisory && insertResult.rowCount === 0) {
+      // Fetch existing approval for idempotent response
+      const existingResult = await dbClient.query<{ id: string; reward: number }>(
+        `SELECT id, reward FROM approvals WHERE decision_id = $1 AND advisory = false`,
+        [decision_id]
+      );
+      if (existingResult.rows.length > 0) {
+        logger.info(
+          {
+            correlationId,
+            decisionId: decision_id,
+            existingApprovalId: existingResult.rows[0].id,
+          },
+          'Idempotent approval: non-advisory approval already exists for decision'
+        );
+
+        const response: CreateApprovalResponse = {
+          id: existingResult.rows[0].id,
+          decision_id,
+          reward: existingResult.rows[0].reward,
+          weights_updated: 0,
+          learning_applied: false,
+        };
+
+        res.status(200).json(response);
+        return;
+      }
+    }
 
     // Extract recommendation type for edge updates
     const recommendationType = extractRecommendationType(decision.recommendation);
@@ -183,6 +221,7 @@ export async function createApprovalHandler(
         approvalId,
         decisionId: decision_id,
         approved,
+        advisory,
         reward: adjustedReward,
         recommendationType,
         weightsUpdated,
