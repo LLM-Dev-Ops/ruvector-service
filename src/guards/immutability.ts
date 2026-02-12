@@ -28,6 +28,10 @@ const FORBIDDEN_MUTATION_PATTERNS = [
   /UPDATE\s+approvals/i,
   /DELETE\s+FROM\s+approvals/i,
   /TRUNCATE\s+approvals/i,
+  // Protect executions table from mutation (append-only authority records)
+  /UPDATE\s+executions/i,
+  /DELETE\s+FROM\s+executions/i,
+  /TRUNCATE\s+executions/i,
 ];
 
 /**
@@ -62,6 +66,7 @@ export function validateLearningQuery(query: string, tableName: string): boolean
     'learning_events',
     'learning_decision_events',
     'approvals',
+    'executions',
   ].includes(tableName);
 
   if (!isLearningTable) {

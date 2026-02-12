@@ -84,6 +84,39 @@ export const errorTotal = new Counter({
   registers: [register],
 });
 
+/**
+ * Execution acceptance counter
+ * Tracks accepted vs rejected execution requests
+ */
+export const executionAcceptanceTotal = new Counter({
+  name: 'ruvvector_execution_acceptance_total',
+  help: 'Total execution acceptance requests by status',
+  labelNames: ['status'],
+  registers: [register],
+});
+
+/**
+ * Execution acceptance latency
+ * Tracks time to process acceptance requests
+ */
+export const executionAcceptanceDuration = new Histogram({
+  name: 'ruvvector_execution_acceptance_duration_seconds',
+  help: 'Execution acceptance processing latency',
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+  registers: [register],
+});
+
+/**
+ * Execution validation counter
+ * Tracks valid vs invalid signature validations
+ */
+export const executionValidationTotal = new Counter({
+  name: 'ruvvector_execution_validation_total',
+  help: 'Total execution validation requests by result',
+  labelNames: ['result'],
+  registers: [register],
+});
+
 export default {
   register,
   ruvvectorRequestsTotal,
@@ -92,4 +125,7 @@ export default {
   ruvvectorCircuitBreakerState,
   ruvvectorActiveConnections,
   errorTotal,
+  executionAcceptanceTotal,
+  executionAcceptanceDuration,
+  executionValidationTotal,
 };

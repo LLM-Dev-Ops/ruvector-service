@@ -319,6 +319,48 @@ export class DatabaseClient {
         CREATE INDEX IF NOT EXISTS idx_learning_decision_events_created_at ON learning_decision_events(created_at DESC)
       `);
 
+      // Create executions table - append-only authority records
+      // ruvvector-service is the ONLY authority for execution_id minting
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS executions (
+          execution_id TEXT PRIMARY KEY,
+          accepted BOOLEAN NOT NULL,
+          reason TEXT,
+          caller_id VARCHAR(255) NOT NULL,
+          org_id VARCHAR(255) NOT NULL,
+          simulation_type VARCHAR(100) NOT NULL,
+          simulation_context JSONB NOT NULL,
+          authority_signature TEXT NOT NULL,
+          root_span_id UUID NOT NULL,
+          lineage JSONB NOT NULL,
+          idempotency_key VARCHAR(255),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      // Indexes for executions
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_executions_created_at ON executions(created_at DESC)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_executions_caller_id ON executions(caller_id)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_executions_org_id ON executions(org_id)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(accepted)
+      `);
+
+      // Unique partial index for idempotency on non-null keys
+      await this.pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_idempotency_key
+        ON executions(idempotency_key) WHERE idempotency_key IS NOT NULL
+      `);
+
       this.initialized = true;
       logger.info('Database initialized successfully');
     } catch (error) {

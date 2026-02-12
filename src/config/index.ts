@@ -45,6 +45,12 @@ interface Config {
   shutdown: {
     timeout: number;      // Graceful shutdown (ms)
   };
+
+  // Execution authority configuration
+  execution: {
+    hmacSecret: string;            // HMAC-SHA256 signing secret for authority signatures
+    acceptanceTimeoutMs: number;   // Max processing time for acceptance (ms)
+  };
 }
 
 /**
@@ -129,6 +135,12 @@ export const config: Config = {
   // Shutdown
   shutdown: {
     timeout: getEnvNumber('SHUTDOWN_TIMEOUT', 30000),
+  },
+
+  // Execution authority
+  execution: {
+    hmacSecret: getEnvVar('EXECUTION_HMAC_SECRET', ''),
+    acceptanceTimeoutMs: getEnvNumber('EXECUTION_ACCEPTANCE_TIMEOUT_MS', 5000),
   },
 };
 

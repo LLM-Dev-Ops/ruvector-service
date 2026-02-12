@@ -588,3 +588,70 @@ export interface DecisionEventsResponse {
   events: DecisionEvent[];
   next_cursor: string | null;
 }
+
+// ============================================================================
+// Execution Authority Interfaces (Authoritative Execution Origin)
+// ruvvector-service is the ONLY authority for enterprise simulation execution_ids.
+// ============================================================================
+
+export type ExecutionStatus = 'accepted' | 'rejected';
+
+export interface ExecutionRootSpan {
+  span_id: string;
+  type: 'execution_root';
+  parent_span_id: null;
+  created_at: string;
+}
+
+export interface ExecutionLineageMetadata {
+  origin_service: 'ruvvector-service';
+  origin_version: string;
+  acceptance_timestamp: string;
+  root_span: ExecutionRootSpan;
+  caller_id: string;
+  org_id: string;
+  simulation_context: Record<string, unknown>;
+}
+
+export interface ExecutionRecord {
+  execution_id: string;
+  accepted: boolean;
+  reason: string | null;
+  caller_id: string;
+  org_id: string;
+  simulation_type: string;
+  simulation_context: Record<string, unknown>;
+  authority_signature: string;
+  root_span_id: string;
+  lineage: ExecutionLineageMetadata;
+  idempotency_key: string | null;
+  created_at: string;
+}
+
+export interface AcceptExecutionRequest {
+  caller_id: string;
+  org_id: string;
+  simulation_type: string;
+  simulation_context: Record<string, unknown>;
+  idempotency_key?: string;
+}
+
+export interface AcceptExecutionResponse {
+  execution_id: string;
+  accepted: boolean;
+  reason: string | null;
+  authority_signature: string;
+  lineage: ExecutionLineageMetadata;
+  created_at: string;
+}
+
+export interface ValidateExecutionRequest {
+  execution_id: string;
+  authority_signature: string;
+}
+
+export interface ValidateExecutionResponse {
+  valid: boolean;
+  execution_id: string;
+  reason: string | null;
+}

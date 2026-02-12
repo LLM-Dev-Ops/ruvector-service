@@ -49,6 +49,12 @@ import {
 } from './handlers/decisions';
 import { createApprovalHandler } from './handlers/approvals';
 import {
+  acceptExecutionHandler,
+  getExecutionHandler,
+  listExecutionsHandler,
+  validateExecutionHandler,
+} from './handlers/executions';
+import {
   createApprovalLearningHandler,
   createFeedbackAssimilationHandler,
 } from './handlers/learning';
@@ -191,6 +197,32 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   // GET /v1/decisions - List decisions (with optional objective, limit, offset query params)
   app.get('/v1/decisions', (req, res, next) => {
     listDecisionsHandler(req, res, dbClient).catch(next);
+  });
+
+  // ============================================================================
+  // Executions API - Authoritative Execution Origin
+  // ruvvector-service is the ONLY authority for enterprise simulation execution_ids.
+  // No simulation may proceed without synchronous acceptance from this endpoint.
+  // ============================================================================
+
+  // POST /v1/executions/accept - Synchronous execution acceptance (canonical mint)
+  app.post('/v1/executions/accept', (req, res, next) => {
+    acceptExecutionHandler(req, res, dbClient).catch(next);
+  });
+
+  // GET /v1/executions/:id - Retrieve an execution record by execution_id
+  app.get('/v1/executions/:id', (req, res, next) => {
+    getExecutionHandler(req, res, dbClient).catch(next);
+  });
+
+  // GET /v1/executions - List executions (with optional filters)
+  app.get('/v1/executions', (req, res, next) => {
+    listExecutionsHandler(req, res, dbClient).catch(next);
+  });
+
+  // POST /v1/executions/validate - Validate execution_id + authority signature
+  app.post('/v1/executions/validate', (req, res, next) => {
+    validateExecutionHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

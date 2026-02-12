@@ -19,5 +19,8 @@ process.env.RUVVECTOR_BASE_URL = 'http://localhost:8080';
 process.env.ENTITLEMENT_SERVICE_URL = 'http://localhost:9000';
 process.env.ENABLE_METRICS = 'false';
 
+// Execution authority config for testing
+process.env.EXECUTION_HMAC_SECRET = 'test-hmac-secret-minimum-32-chars-long-for-testing-only';
+
 // Increase timeout for integration tests
 jest.setTimeout(30000);

@@ -15,6 +15,7 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'RUVVECTOR_DB_NAME',
   'RUVVECTOR_DB_USER',
   'RUVVECTOR_DB_PASSWORD',
+  'EXECUTION_HMAC_SECRET',
 ] as const;
 
 /**
@@ -35,6 +36,7 @@ const OPTIONAL_ENV_VARS = [
   'CIRCUIT_BREAKER_RESET',
   'SHUTDOWN_TIMEOUT',
   'MAX_LATENCY_MS',
+  'EXECUTION_ACCEPTANCE_TIMEOUT_MS',
 ] as const;
 
 export interface AssertionResult {
@@ -140,6 +142,32 @@ export function assertPerformanceBudget(): number {
 }
 
 /**
+ * Assert execution authority configuration.
+ * Validates HMAC secret meets minimum security requirements.
+ * CRASHES in production if secret is missing or too short.
+ */
+export function assertExecutionAuthority(): void {
+  const secret = process.env.EXECUTION_HMAC_SECRET;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction && (!secret || secret.length < 32)) {
+    throw new Error(
+      'FATAL: EXECUTION_HMAC_SECRET must be at least 32 characters in production. ' +
+      'This service is the authoritative execution origin - signing key is critical.'
+    );
+  }
+
+  logger.info(
+    {
+      role: 'AUTHORITATIVE_EXECUTION_ORIGIN',
+      hmac_algorithm: 'SHA-256',
+      secret_configured: !!secret && secret.length >= 32,
+    },
+    'Execution authority configuration asserted'
+  );
+}
+
+/**
  * Assert memory layer role rules are properly configured.
  * Validates that the service is configured as a deterministic memory layer.
  */
@@ -170,6 +198,7 @@ export function runStartupAssertions(): {
 
   const envResult = assertRequiredEnvVars();
   const maxLatencyMs = assertPerformanceBudget();
+  assertExecutionAuthority();
   assertMemoryLayerRole();
 
   logger.info('All startup assertions passed');
@@ -180,6 +209,7 @@ export function runStartupAssertions(): {
 export default {
   assertRequiredEnvVars,
   assertPerformanceBudget,
+  assertExecutionAuthority,
   assertMemoryLayerRole,
   runStartupAssertions,
 };

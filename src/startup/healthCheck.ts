@@ -31,6 +31,7 @@ const REQUIRED_TABLES = [
   'approvals',
   'learning_weights',
   'learning_events',
+  'executions',
 ] as const;
 
 /**
@@ -53,6 +54,11 @@ const REQUIRED_INDEXES = [
   'idx_learning_events_decision_type',
   'idx_learning_events_created_at',
   'idx_learning_events_inputs_hash_unique',
+  // Executions indexes
+  'idx_executions_created_at',
+  'idx_executions_caller_id',
+  'idx_executions_org_id',
+  'idx_executions_status',
 ] as const;
 
 /**
