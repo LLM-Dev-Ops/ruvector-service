@@ -117,6 +117,28 @@ export const executionValidationTotal = new Counter({
   registers: [register],
 });
 
+/**
+ * Simulation acceptance counter
+ * Tracks accepted vs rejected simulation intent requests
+ */
+export const simulationAcceptanceTotal = new Counter({
+  name: 'ruvvector_simulation_acceptance_total',
+  help: 'Total simulation acceptance requests by status',
+  labelNames: ['status'],
+  registers: [register],
+});
+
+/**
+ * Simulation acceptance latency
+ * Tracks time to process simulation acceptance requests
+ */
+export const simulationAcceptanceDuration = new Histogram({
+  name: 'ruvvector_simulation_acceptance_duration_seconds',
+  help: 'Simulation acceptance processing latency',
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+  registers: [register],
+});
+
 export default {
   register,
   ruvvectorRequestsTotal,
@@ -128,4 +150,6 @@ export default {
   executionAcceptanceTotal,
   executionAcceptanceDuration,
   executionValidationTotal,
+  simulationAcceptanceTotal,
+  simulationAcceptanceDuration,
 };

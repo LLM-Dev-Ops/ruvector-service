@@ -54,6 +54,7 @@ import {
   listExecutionsHandler,
   validateExecutionHandler,
 } from './handlers/executions';
+import { acceptSimulationHandler } from './handlers/simulations';
 import {
   createApprovalLearningHandler,
   createFeedbackAssimilationHandler,
@@ -223,6 +224,17 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   // POST /v1/executions/validate - Validate execution_id + authority signature
   app.post('/v1/executions/validate', (req, res, next) => {
     validateExecutionHandler(req, res, dbClient).catch(next);
+  });
+
+  // ============================================================================
+  // Simulations API - Agentics-CLI Simulation Intent Authority
+  // ruvvector-service is the ONLY authority for simulation execution_ids.
+  // POST /v1/simulations accepts CLI simulation intents and mints execution authority.
+  // ============================================================================
+
+  // POST /v1/simulations - Accept simulation intent from agentics-cli
+  app.post('/v1/simulations', (req, res, next) => {
+    acceptSimulationHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

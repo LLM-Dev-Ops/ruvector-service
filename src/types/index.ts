@@ -655,3 +655,27 @@ export interface ValidateExecutionResponse {
   execution_id: string;
   reason: string | null;
 }
+
+// ============================================================================
+// Simulation Intent Interfaces (Agentics-CLI Execution Authority)
+// ruvvector-service is the ONLY authority for simulation execution_ids.
+// POST /v1/simulations accepts simulation intents and mints execution authority.
+// ============================================================================
+
+export interface SimulationIntentRequest {
+  caller_id: string;
+  org_id: string;
+  simulation_type: string;
+  simulation_context: Record<string, unknown>;
+  intent_description: string;
+  idempotency_key?: string;
+}
+
+export interface SimulationAcceptanceResponse {
+  execution_id: string;
+  accepted: boolean;
+  parent_span_id: string;
+  authority_signature: string;
+  lineage: ExecutionLineageMetadata;
+  created_at: string;
+}
