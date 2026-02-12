@@ -24,6 +24,28 @@ import {
 } from '../utils/metrics';
 
 // ============================================================================
+// Payload Normalization
+// ============================================================================
+
+/**
+ * Normalize incoming payload into canonical shape BEFORE validation.
+ * agentics-cli may send the intent string under different field names.
+ *
+ * Priority: intent_description > intent > scenario > description
+ */
+export function normalizePayload(body: Record<string, unknown>): Record<string, unknown> {
+  if (body.intent_description) return body;
+
+  const intentValue = body.intent ?? body.scenario ?? body.description;
+  if (intentValue !== undefined) {
+    const { intent, scenario, description, ...rest } = body as Record<string, unknown>;
+    return { ...rest, intent_description: intentValue };
+  }
+
+  return body;
+}
+
+// ============================================================================
 // AcceptanceRequestSchema
 // ============================================================================
 
@@ -50,8 +72,11 @@ export async function acceptSimulationHandler(
   const startTime = Date.now();
 
   try {
+    // Normalize — map intent/scenario/description → intent_description
+    const normalized = normalizePayload(req.body || {});
+
     // Validate — only intent_description is required
-    const validatedData = acceptanceRequestSchema.parse(req.body);
+    const validatedData = acceptanceRequestSchema.parse(normalized);
 
     const {
       intent_description,

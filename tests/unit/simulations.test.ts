@@ -146,6 +146,102 @@ describe('POST /v1/simulations — Execution Authority Minting Gate', () => {
     });
   });
 
+  describe('payload normalization — CLI field name compatibility', () => {
+    it('should accept "intent" and map to intent_description', async () => {
+      const req = mockReq({ body: { intent: 'Run deployment simulation' } });
+      const res = mockRes();
+      const db = mockDbClient(jest.fn().mockResolvedValue({ rows: [], rowCount: 1 }));
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ accepted: true, authority: 'ruvector-service' })
+      );
+    });
+
+    it('should accept "scenario" and map to intent_description', async () => {
+      const req = mockReq({ body: { scenario: 'Migrate database to v2' } });
+      const res = mockRes();
+      const db = mockDbClient(jest.fn().mockResolvedValue({ rows: [], rowCount: 1 }));
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('should accept "description" and map to intent_description', async () => {
+      const req = mockReq({ body: { description: 'Scale API to 100 replicas' } });
+      const res = mockRes();
+      const db = mockDbClient(jest.fn().mockResolvedValue({ rows: [], rowCount: 1 }));
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('should prefer intent_description over intent/scenario/description', async () => {
+      const req = mockReq({
+        body: {
+          intent_description: 'canonical value',
+          intent: 'ignored',
+          scenario: 'ignored',
+          description: 'ignored',
+        },
+      });
+      const res = mockRes();
+      const queryFn = jest.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+      const db = mockDbClient(queryFn);
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const lineageSeed = JSON.parse(queryFn.mock.calls[0][1][9]);
+      expect(lineageSeed.intent_description).toBe('canonical value');
+    });
+
+    it('should follow priority: intent > scenario > description', async () => {
+      const req = mockReq({
+        body: { intent: 'from intent', scenario: 'from scenario', description: 'from desc' },
+      });
+      const res = mockRes();
+      const queryFn = jest.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+      const db = mockDbClient(queryFn);
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const lineageSeed = JSON.parse(queryFn.mock.calls[0][1][9]);
+      expect(lineageSeed.intent_description).toBe('from intent');
+    });
+
+    it('should preserve optional fields alongside normalized intent', async () => {
+      const req = mockReq({
+        body: { scenario: 'test sim', caller_id: 'agentics-cli', org_id: 'org-1' },
+      });
+      const res = mockRes();
+      const queryFn = jest.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+      const db = mockDbClient(queryFn);
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const insertParams = queryFn.mock.calls[0][1];
+      expect(insertParams[3]).toBe('agentics-cli'); // caller_id
+      expect(insertParams[4]).toBe('org-1'); // org_id
+    });
+
+    it('should return 400 when none of the intent fields exist', async () => {
+      const req = mockReq({ body: { caller_id: 'cli' } });
+      const res = mockRes();
+      const db = mockDbClient();
+
+      await acceptSimulationHandler(req as Request, res as Response, db);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+  });
+
   describe('response contract', () => {
     it('should return exactly the specified response shape', async () => {
       const req = mockReq({ body: minimalBody });
