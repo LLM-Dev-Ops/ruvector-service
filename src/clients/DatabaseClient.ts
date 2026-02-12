@@ -326,9 +326,9 @@ export class DatabaseClient {
           execution_id TEXT PRIMARY KEY,
           accepted BOOLEAN NOT NULL,
           reason TEXT,
-          caller_id VARCHAR(255) NOT NULL,
-          org_id VARCHAR(255) NOT NULL,
-          simulation_type VARCHAR(100) NOT NULL,
+          caller_id VARCHAR(255),
+          org_id VARCHAR(255),
+          simulation_type VARCHAR(100),
           simulation_context JSONB NOT NULL,
           authority_signature TEXT NOT NULL,
           root_span_id UUID NOT NULL,
@@ -337,6 +337,12 @@ export class DatabaseClient {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+
+      // Migration: relax NOT NULL constraints for lightweight authority minting (POST /v1/simulations)
+      // These columns are optional when minting execution authority with only intent_description.
+      await this.pool.query(`ALTER TABLE executions ALTER COLUMN caller_id DROP NOT NULL`).catch(() => {});
+      await this.pool.query(`ALTER TABLE executions ALTER COLUMN org_id DROP NOT NULL`).catch(() => {});
+      await this.pool.query(`ALTER TABLE executions ALTER COLUMN simulation_type DROP NOT NULL`).catch(() => {});
 
       // Indexes for executions
       await this.pool.query(`

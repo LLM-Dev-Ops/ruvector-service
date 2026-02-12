@@ -1,29 +1,22 @@
 /**
- * Simulations API Handler - Authoritative Simulation Execution Origin
+ * POST /v1/simulations — Execution Authority Minting Gate
  *
- * ruvvector-service is the ONLY authority for enterprise simulation execution_ids.
- * This endpoint accepts simulation intents from agentics-cli and mints canonical
- * execution_ids. It does NOT perform simulation logic - execution authority only.
+ * Bounded Context: Execution Authority
+ * ruvvector-service is the sole execution authority.
  *
- * Endpoints:
- *   POST /v1/simulations   - Accept simulation intent (canonical mint)
+ * This endpoint ONLY mints execution authority.
+ * It does NOT validate enterprise policy, compute cost, or run simulation logic.
+ * Authority first. Enterprise validation happens downstream.
  */
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
-import { config } from '../config';
-import {
-  ExecutionRecord,
-  ExecutionLineageMetadata,
-  ExecutionRootSpan,
-  SimulationAcceptanceResponse,
-} from '../types';
+import { AcceptanceResponse, AuthoritySpan } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
 import {
   mintExecutionId,
   generateRootSpanId,
-  signExecution,
 } from '../utils/executionAuthority';
 import {
   simulationAcceptanceTotal,
@@ -31,29 +24,21 @@ import {
 } from '../utils/metrics';
 
 // ============================================================================
-// Zod Validation Schema
+// AcceptanceRequestSchema
 // ============================================================================
 
-export const simulationIntentSchema = z.object({
-  caller_id: z.string().min(1).max(255),
-  org_id: z.string().min(1).max(255),
-  simulation_type: z.string().min(1).max(100),
-  simulation_context: z.record(z.unknown()),
+export const acceptanceRequestSchema = z.object({
   intent_description: z.string().min(1).max(2000),
-  idempotency_key: z.string().max(255).optional(),
+  caller_id: z.string().min(1).max(255).optional(),
+  org_id: z.string().min(1).max(255).optional(),
+  simulation_type: z.string().min(1).max(100).optional(),
+  simulation_context: z.record(z.unknown()).optional(),
 });
 
 // ============================================================================
-// POST /v1/simulations - Accept simulation intent
+// POST /v1/simulations — Mint execution authority
 // ============================================================================
 
-/**
- * Accept a simulation intent and mint a canonical execution_id.
- *
- * This is the execution authority entry point for agentics-cli simulations.
- * The caller MUST block until this returns.
- * Any non-201 response means: the simulation does not exist.
- */
 export async function acceptSimulationHandler(
   req: Request,
   res: Response,
@@ -65,91 +50,40 @@ export async function acceptSimulationHandler(
   const startTime = Date.now();
 
   try {
-    const validatedData = simulationIntentSchema.parse(req.body);
+    // Validate — only intent_description is required
+    const validatedData = acceptanceRequestSchema.parse(req.body);
 
     const {
+      intent_description,
       caller_id,
       org_id,
       simulation_type,
       simulation_context,
-      intent_description,
-      idempotency_key,
     } = validatedData;
-
-    // Idempotency check: if key provided and record exists, return existing
-    if (idempotency_key) {
-      const existing = await dbClient.query<ExecutionRecord>(
-        `SELECT execution_id, accepted, reason, caller_id, org_id, simulation_type,
-                simulation_context, authority_signature, root_span_id, lineage,
-                idempotency_key, created_at
-         FROM executions WHERE idempotency_key = $1`,
-        [idempotency_key]
-      );
-
-      if (existing.rows.length > 0) {
-        const record = existing.rows[0];
-        const lineage = record.lineage as ExecutionLineageMetadata;
-
-        logger.info(
-          {
-            correlationId,
-            executionId: record.execution_id,
-            idempotencyKey: idempotency_key,
-          },
-          'Idempotent simulation acceptance: returning existing record'
-        );
-
-        const response: SimulationAcceptanceResponse = {
-          execution_id: record.execution_id,
-          accepted: record.accepted,
-          parent_span_id: lineage.root_span.span_id,
-          authority_signature: record.authority_signature,
-          lineage,
-          created_at: record.created_at,
-        };
-
-        res.status(200).json(response);
-        return;
-      }
-    }
 
     // Mint canonical execution_id
     const executionId = mintExecutionId();
     const rootSpanId = generateRootSpanId();
     const now = new Date().toISOString();
 
-    // Sign the execution acceptance
-    const authoritySignature = signExecution(
-      executionId,
-      now,
-      config.execution.hmacSecret
-    );
-
-    // Build root execution span
-    const rootSpan: ExecutionRootSpan = {
+    // Create ROOT authority span
+    const rootSpan: AuthoritySpan = {
       span_id: rootSpanId,
-      type: 'execution_root',
-      parent_span_id: null,
+      type: 'authority',
+      origin: 'ruvector-service',
+      parent: null,
       created_at: now,
     };
 
-    // Build lineage metadata (merge intent_description into simulation_context)
-    const enrichedContext = {
-      ...simulation_context,
-      intent_description,
-    };
-
-    const lineage: ExecutionLineageMetadata = {
-      origin_service: 'ruvvector-service',
-      origin_version: '1.0.0',
-      acceptance_timestamp: now,
+    // Persist lineage seed
+    const lineageSeed = {
       root_span: rootSpan,
-      caller_id,
-      org_id,
-      simulation_context: enrichedContext,
+      intent_description,
+      ...(caller_id && { caller_id }),
+      ...(org_id && { org_id }),
+      ...(simulation_context && { simulation_context }),
     };
 
-    // INSERT into executions table (append-only)
     await dbClient.query(
       `INSERT INTO executions (execution_id, accepted, reason, caller_id, org_id,
                                simulation_type, simulation_context, authority_signature,
@@ -159,14 +93,14 @@ export async function acceptSimulationHandler(
         executionId,
         true,
         null,
-        caller_id,
-        org_id,
-        simulation_type,
-        JSON.stringify(enrichedContext),
-        authoritySignature,
+        caller_id || null,
+        org_id || null,
+        simulation_type || null,
+        JSON.stringify(simulation_context || {}),
+        'authority-mint',
         rootSpanId,
-        JSON.stringify(lineage),
-        idempotency_key || null,
+        JSON.stringify(lineageSeed),
+        null,
         now,
       ]
     );
@@ -180,38 +114,32 @@ export async function acceptSimulationHandler(
       {
         correlationId,
         executionId,
-        callerId: caller_id,
-        orgId: org_id,
-        simulationType: simulation_type,
         rootSpanId,
-        parentSpanId: rootSpanId,
         durationMs: Date.now() - startTime,
       },
-      'Simulation intent accepted - canonical execution_id minted'
+      'Execution authority minted'
     );
 
-    const response: SimulationAcceptanceResponse = {
+    const response: AcceptanceResponse = {
       execution_id: executionId,
-      accepted: true,
       parent_span_id: rootSpanId,
-      authority_signature: authoritySignature,
-      lineage,
-      created_at: now,
+      authority: 'ruvector-service',
+      accepted: true,
+      timestamp: now,
     };
 
-    res.status(201).json(response);
+    res.status(200).json(response);
   } catch (error) {
-    // Record duration on all paths
     const duration = (Date.now() - startTime) / 1000;
     simulationAcceptanceDuration.observe(duration);
 
     if (error instanceof z.ZodError) {
       simulationAcceptanceTotal.inc({ status: 'rejected' });
 
-      logger.warn({ correlationId, errors: error.errors }, 'Simulation intent validation failed');
+      logger.warn({ correlationId, errors: error.errors }, 'Acceptance validation failed');
       res.status(400).json({
         error: 'validation_error',
-        message: 'Request validation failed',
+        message: 'intent_description is required',
         correlationId,
         details: error.errors.map(e => ({
           path: e.path.join('.'),
@@ -221,12 +149,11 @@ export async function acceptSimulationHandler(
       return;
     }
 
-    // FAIL CLOSED: any non-validation error returns 500
-    // If lineage storage is unavailable, the simulation MUST NOT exist.
-    logger.error({ correlationId, error }, 'Failed to process simulation acceptance');
+    // FAIL CLOSED: lineage persistence failure → no execution authority exists
+    logger.error({ correlationId, error }, 'Lineage persistence failed');
     res.status(500).json({
       error: 'internal_error',
-      message: 'Failed to process simulation acceptance',
+      message: 'Lineage persistence failed',
       correlationId,
     });
   }
@@ -234,5 +161,5 @@ export async function acceptSimulationHandler(
 
 export default {
   acceptSimulationHandler,
-  simulationIntentSchema,
+  acceptanceRequestSchema,
 };
