@@ -3,9 +3,13 @@
  * Implements CRUD operations for Decision Records storage in PostgreSQL
  */
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import {
+  CreateDecisionRequestSchema,
+  validateContract,
+  ContractViolationError,
+} from '../contracts';
+import type {
   DecisionRecord,
   CreateDecisionResponse,
   ListDecisionsResponse,
@@ -13,33 +17,8 @@ import {
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
 
-// Validation schema for signals
-const signalsSchema = z.object({
-  financial: z.string(),
-  risk: z.string(),
-  complexity: z.string(),
-});
-
-// Validation schema for graph relations
-const graphRelationsSchema = z.object({
-  objective_to_repos: z.array(z.string()),
-  repos_to_signals: z.record(z.array(z.string())),
-  signals_to_recommendation: z.array(z.string()),
-});
-
-// Validation schema for creating a decision
-export const createDecisionSchema = z.object({
-  id: z.string().min(1),                    // Accept any string ID (e.g., "decision-uuid")
-  objective: z.string().min(1),
-  command: z.string().min(1),
-  raw_output_hash: z.string().min(1),       // Accept any hash format
-  recommendation: z.string().min(1),
-  confidence: z.string().min(1),            // Accept freeform confidence (e.g., "LOW - Insufficient data")
-  signals: signalsSchema,
-  embedding_text: z.string().min(1),
-  graph_relations: graphRelationsSchema,
-  created_at: z.string().optional(),
-});
+// Re-export contract schema for backwards compatibility
+export const createDecisionSchema = CreateDecisionRequestSchema;
 
 /**
  * POST /v1/decisions - Store a new decision record
@@ -53,8 +32,8 @@ export async function createDecisionHandler(
   res.setHeader('x-correlation-id', correlationId);
 
   try {
-    // Validate request body
-    const validatedData = createDecisionSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(CreateDecisionRequestSchema, req.body);
 
     const {
       id,
@@ -73,7 +52,6 @@ export async function createDecisionHandler(
     const createdAt = created_at || new Date().toISOString();
 
     // Insert decision into database
-    // Note: embedding field left null - actual embedding generation is a future enhancement
     await dbClient.query(
       `INSERT INTO decisions (id, objective, command, raw_output_hash, recommendation, confidence, signals, embedding_text, embedding, graph_relations, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -95,14 +73,14 @@ export async function createDecisionHandler(
         confidence,
         JSON.stringify(signals),
         embedding_text,
-        null, // embedding - placeholder for future vector embedding
+        null,
         JSON.stringify(graph_relations),
         createdAt,
       ]
     );
 
     logger.info(
-      { correlationId, decisionId: id, confidence, recommendation: recommendation.substring(0, 50) },
+      { correlationId, decisionId: id, confidence, recommendation: recommendation.substring(0, 50), repo_name: 'ruvvector-service' },
       'Decision stored successfully'
     );
 
@@ -129,21 +107,18 @@ export async function createDecisionHandler(
 
     res.status(201).json(response);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Decision validation failed');
+    if (error instanceof ContractViolationError) {
+      logger.warn({ correlationId, errors: error.details }, 'Decision contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to store decision');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to store decision');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to store decision',
@@ -163,19 +138,19 @@ export async function getDecisionHandler(
   const correlationId = getOrCreateCorrelationId(req.headers);
   res.setHeader('x-correlation-id', correlationId);
 
+  const { id } = req.params;
+
+  // Validate ID is not empty
+  if (!id || id.trim().length === 0) {
+    res.status(400).json({
+      error: 'validation_error',
+      message: 'Decision ID is required',
+      correlationId,
+    });
+    return;
+  }
+
   try {
-    const { id } = req.params;
-
-    // Validate ID is not empty
-    if (!id || id.trim().length === 0) {
-      res.status(400).json({
-        error: 'validation_error',
-        message: 'Decision ID is required',
-        correlationId,
-      });
-      return;
-    }
-
     const result = await dbClient.query<DecisionRecord>(
       `SELECT id, objective, command, raw_output_hash, recommendation, confidence, signals, embedding_text, embedding, graph_relations, created_at
        FROM decisions WHERE id = $1`,
@@ -211,7 +186,7 @@ export async function getDecisionHandler(
     logger.info({ correlationId, decisionId: id }, 'Decision retrieved successfully');
     res.status(200).json(decision);
   } catch (error) {
-    logger.error({ correlationId, error }, 'Failed to retrieve decision');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to retrieve decision');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to retrieve decision',
@@ -259,8 +234,6 @@ export async function listDecisionsHandler(
     const total = parseInt(countResult.rows[0]?.total || '0', 10);
 
     // Get decisions with pagination, biased by learning weights
-    // JOIN with learning_weights to favor approved patterns
-    // Weight is accumulated from approval signals: positive = approved, negative = rejected
     const selectQuery = `
       SELECT d.id, d.objective, d.command, d.raw_output_hash, d.recommendation, d.confidence,
              d.signals, d.embedding_text, d.embedding, d.graph_relations, d.created_at,
@@ -305,7 +278,7 @@ export async function listDecisionsHandler(
 
     res.status(200).json(response);
   } catch (error) {
-    logger.error({ correlationId, error }, 'Failed to list decisions');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to list decisions');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to list decisions',

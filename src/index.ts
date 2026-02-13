@@ -407,9 +407,13 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
   // ============================================================================
   const integrityResult = await assertHistoricalDataIntegrity(dbClient);
   if (!integrityResult.valid) {
-    logger.warn(
-      { issues: integrityResult.issues },
-      'Historical data integrity issues detected'
+    logger.error(
+      { issues: integrityResult.issues, repo_name: 'ruvvector-service' },
+      'Historical data integrity issues detected — failing startup'
+    );
+    throw new Error(
+      `FATAL: Historical data integrity check failed: ${integrityResult.issues.join('; ')}. ` +
+      `DO NOT allow partial operation with corrupted data.`
     );
   }
 
@@ -426,11 +430,15 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
     },
   });
 
-  // Establish connection to RuvVector (optional - may not be available)
+  // Establish connection to RuvVector
   try {
     await vectorClient.connect();
   } catch (error) {
-    logger.warn({ error }, 'VectorClient connection failed - continuing without vector operations');
+    logger.error({ error, repo_name: 'ruvvector-service' }, 'VectorClient connection failed');
+    throw new Error(
+      'FATAL: VectorClient connection failed. ' +
+      'DO NOT allow partial operation without required service configuration.'
+    );
   }
 
   // Create Express app

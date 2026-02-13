@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { ErrorResponse } from '../types';
+import { ContractViolationError } from '../contracts';
 import logger from '../utils/logger';
 import { errorTotal } from '../utils/metrics';
 import { getOrCreateCorrelationId } from '../utils/correlation';
@@ -33,6 +34,26 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const correlationId = req.correlationId || getOrCreateCorrelationId(req.headers);
+
+  // Handle contract violation errors — FAIL LOUDLY
+  if (err instanceof ContractViolationError) {
+    const errorResponse: ErrorResponse = {
+      error: 'contract_violation',
+      message: err.message,
+      correlationId,
+      details: err.details as any[],
+    };
+
+    errorTotal.inc({ type: 'contract_violation', endpoint: req.path });
+
+    logger.warn(
+      { correlationId, errors: err.details, endpoint: req.path },
+      'Contract violation'
+    );
+
+    res.status(400).json(errorResponse);
+    return;
+  }
 
   // Handle Zod validation errors
   // SPARC: 400 validation_error - Request body failed validation

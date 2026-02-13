@@ -106,13 +106,13 @@ export const config: Config = {
     poolSize: getEnvNumber('RUVVECTOR_POOL_SIZE', 10),
   },
 
-  // PostgreSQL Database configuration (for plans storage)
+  // PostgreSQL Database configuration — required for operation
   database: {
     host: getEnvVar('RUVVECTOR_DB_HOST', 'localhost'),
     port: getEnvNumber('RUVVECTOR_DB_PORT', 5432),
     name: getEnvVar('RUVVECTOR_DB_NAME', 'ruvector-postgres'),
     user: getEnvVar('RUVVECTOR_DB_USER', 'postgres'),
-    password: getEnvVar('RUVVECTOR_DB_PASSWORD', ''),
+    password: getEnvVar('RUVVECTOR_DB_PASSWORD', ''),  // Validated at startup assertions
     maxConnections: getEnvNumber('RUVVECTOR_DB_MAX_CONNECTIONS', 20),
     idleTimeoutMs: getEnvNumber('RUVVECTOR_DB_IDLE_TIMEOUT', 30000),
     connectionTimeoutMs: getEnvNumber('RUVVECTOR_DB_CONNECTION_TIMEOUT', 10000),
@@ -137,9 +137,18 @@ export const config: Config = {
     timeout: getEnvNumber('SHUTDOWN_TIMEOUT', 30000),
   },
 
-  // Execution authority
+  // Execution authority — HMAC secret is REQUIRED, no default
   execution: {
-    hmacSecret: getEnvVar('EXECUTION_HMAC_SECRET', ''),
+    hmacSecret: (() => {
+      const secret = process.env.EXECUTION_HMAC_SECRET;
+      if (!secret || secret.trim() === '') {
+        throw new Error(
+          'FATAL: EXECUTION_HMAC_SECRET environment variable is required. ' +
+          'DO NOT allow partial operation without execution authority signing key.'
+        );
+      }
+      return secret;
+    })(),
     acceptanceTimeoutMs: getEnvNumber('EXECUTION_ACCEPTANCE_TIMEOUT_MS', 5000),
   },
 };

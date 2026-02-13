@@ -12,10 +12,18 @@
  *   POST /v1/executions/validate - Validate execution_id + signature
  */
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import { config } from '../config';
 import {
+  AcceptExecutionRequestSchema,
+  ValidateExecutionRequestSchema,
+  ExecutionLineageMetadataSchema,
+  ExecutionRootSpanSchema,
+  validateContract,
+  validateSpanIntegrity,
+  ContractViolationError,
+} from '../contracts';
+import type {
   ExecutionRecord,
   ExecutionLineageMetadata,
   ExecutionRootSpan,
@@ -36,22 +44,9 @@ import {
   executionValidationTotal,
 } from '../utils/metrics';
 
-// ============================================================================
-// Zod Validation Schemas
-// ============================================================================
-
-export const acceptExecutionSchema = z.object({
-  caller_id: z.string().min(1).max(255),
-  org_id: z.string().min(1).max(255),
-  simulation_type: z.string().min(1).max(100),
-  simulation_context: z.record(z.unknown()),
-  idempotency_key: z.string().max(255).optional(),
-});
-
-export const validateExecutionSchema = z.object({
-  execution_id: z.string().min(1),
-  authority_signature: z.string().min(1),
-});
+// Re-export contract schemas as handler schemas for backwards compatibility
+export const acceptExecutionSchema = AcceptExecutionRequestSchema;
+export const validateExecutionSchema = ValidateExecutionRequestSchema;
 
 // ============================================================================
 // POST /v1/executions/accept - Synchronous execution acceptance
@@ -75,7 +70,8 @@ export async function acceptExecutionHandler(
   const startTime = Date.now();
 
   try {
-    const validatedData = acceptExecutionSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(AcceptExecutionRequestSchema, req.body);
 
     const {
       caller_id,
@@ -133,13 +129,20 @@ export async function acceptExecutionHandler(
       config.execution.hmacSecret
     );
 
-    // Build root execution span
+    // Build root execution span and validate integrity
     const rootSpan: ExecutionRootSpan = {
       span_id: rootSpanId,
       type: 'execution_root',
       parent_span_id: null,
       created_at: now,
     };
+
+    // SPAN INTEGRITY: Validate root span against contract schema
+    validateContract(ExecutionRootSpanSchema, rootSpan);
+    validateSpanIntegrity({
+      span_id: rootSpan.span_id,
+      parent_span_id: rootSpan.parent_span_id,
+    });
 
     // Build lineage metadata
     const lineage: ExecutionLineageMetadata = {
@@ -151,6 +154,9 @@ export async function acceptExecutionHandler(
       org_id,
       simulation_context,
     };
+
+    // LINEAGE STORAGE: Validate lineage against contract schema before storage
+    validateContract(ExecutionLineageMetadataSchema, lineage);
 
     // INSERT into executions table (append-only)
     await dbClient.query(
@@ -207,23 +213,20 @@ export async function acceptExecutionHandler(
     const duration = (Date.now() - startTime) / 1000;
     executionAcceptanceDuration.observe(duration);
 
-    if (error instanceof z.ZodError) {
+    if (error instanceof ContractViolationError) {
       executionAcceptanceTotal.inc({ status: 'rejected' });
 
-      logger.warn({ correlationId, errors: error.errors }, 'Execution acceptance validation failed');
+      logger.warn({ correlationId, errors: error.details }, 'Execution acceptance contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to process execution acceptance');
+    logger.error({ correlationId, error, execution_id: 'pending', repo_name: 'ruvvector-service' }, 'Failed to process execution acceptance');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to process execution acceptance',
@@ -244,18 +247,18 @@ export async function getExecutionHandler(
   const correlationId = getOrCreateCorrelationId(req.headers);
   res.setHeader('x-correlation-id', correlationId);
 
+  const { id } = req.params;
+
+  if (!id) {
+    res.status(400).json({
+      error: 'validation_error',
+      message: 'execution_id is required',
+      correlationId,
+    });
+    return;
+  }
+
   try {
-    const { id } = req.params;
-
-    if (!id) {
-      res.status(400).json({
-        error: 'validation_error',
-        message: 'execution_id is required',
-        correlationId,
-      });
-      return;
-    }
-
     const result = await dbClient.query<ExecutionRecord>(
       `SELECT execution_id, accepted, reason, caller_id, org_id, simulation_type,
               simulation_context, authority_signature, root_span_id, lineage,
@@ -275,7 +278,7 @@ export async function getExecutionHandler(
 
     res.status(200).json(result.rows[0]);
   } catch (error) {
-    logger.error({ correlationId, error }, 'Failed to retrieve execution');
+    logger.error({ correlationId, error, execution_id: id, repo_name: 'ruvvector-service' }, 'Failed to retrieve execution');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to retrieve execution',
@@ -356,7 +359,7 @@ export async function listExecutionsHandler(
       offset: parsedOffset,
     });
   } catch (error) {
-    logger.error({ correlationId, error }, 'Failed to list executions');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to list executions');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to list executions',
@@ -382,7 +385,8 @@ export async function validateExecutionHandler(
   res.setHeader('x-correlation-id', correlationId);
 
   try {
-    const validatedData = validateExecutionSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(ValidateExecutionRequestSchema, req.body);
 
     const { execution_id, authority_signature } = validatedData;
 
@@ -429,21 +433,18 @@ export async function validateExecutionHandler(
 
     res.status(200).json(response);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Execution validation request failed');
+    if (error instanceof ContractViolationError) {
+      logger.warn({ correlationId, errors: error.details }, 'Execution validation contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to validate execution');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to validate execution');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to validate execution',

@@ -1,7 +1,44 @@
 /**
  * TypeScript interfaces for ruvvector-service
- * Based on SPARC specification
+ *
+ * CANONICAL SCHEMAS are defined in src/contracts/index.ts
+ * This file re-exports contract types and defines service-local types
+ * that do NOT duplicate contract schemas.
  */
+
+// ============================================================================
+// Re-export all canonical contract types
+// ruvvector-service MUST NOT define its own copies of these schemas.
+// ============================================================================
+export type {
+  ExecutionRootSpan,
+  ExecutionLineageMetadata,
+  ExecutionRecord,
+  AcceptExecutionRequest,
+  AcceptExecutionResponse,
+  ValidateExecutionRequest,
+  ValidateExecutionResponse,
+  AcceptanceRequest,
+  AcceptanceResponse,
+  AuthoritySpan,
+  LineageSeed,
+  ExecutionContext,
+  DecisionSignals,
+  DecisionGraphRelations,
+  DecisionRecord,
+  CreateDecisionRequest,
+  CreateApprovalRequest,
+  LearningDecisionEvent,
+  ApprovalLearningRequest,
+  FeedbackSignal,
+  FeedbackAssimilationRequest,
+  DecisionEventType,
+  DecisionEventPayload,
+  DecisionEvent,
+  TelemetryEnvelope,
+} from '../contracts';
+
+export { ContractViolationError } from '../contracts';
 
 // ============================================================================
 // Normalized Event Structure
@@ -344,63 +381,7 @@ export interface DeleteDeploymentResponse {
 }
 
 // ============================================================================
-// Decisions Storage Interfaces (Executive Synthesis)
-// ============================================================================
-
-export interface DecisionSignals {
-  financial: string;           // Financial assessment summary
-  risk: string;                // Risk assessment summary
-  complexity: string;          // Complexity assessment summary
-}
-
-export interface DecisionGraphRelations {
-  objective_to_repos: string[];                // e.g., ["agentics-simulation-engine"]
-  repos_to_signals: Record<string, string[]>;  // e.g., {"repo": ["financial", "risk"]}
-  signals_to_recommendation: string[];         // e.g., ["PROCEED"]
-}
-
-export interface DecisionRecord {
-  id: string;                           // UUID
-  objective: string;                    // User intent string
-  command: string;                      // e.g., "agentics simulate"
-  raw_output_hash: string;              // SHA-256 hash of simulation JSON
-  recommendation: string;               // "PROCEED: ...", "DEFER: ...", etc.
-  confidence: string;                   // Freeform confidence (e.g., "LOW - Insufficient data")
-  signals: DecisionSignals;
-  embedding_text: string;               // Text for vector embedding
-  embedding?: number[] | null;          // Vector embedding (optional)
-  graph_relations: DecisionGraphRelations;
-  created_at: string;                   // ISO timestamp
-}
-
-export interface CreateDecisionRequest {
-  id: string;
-  objective: string;
-  command: string;
-  raw_output_hash: string;
-  recommendation: string;
-  confidence: string;
-  signals: DecisionSignals;
-  embedding_text: string;
-  graph_relations: DecisionGraphRelations;
-  created_at?: string;
-}
-
-export interface CreateDecisionResponse {
-  id: string;
-  created: boolean;
-  decision: DecisionRecord;
-}
-
-export interface ListDecisionsResponse {
-  data: DecisionRecord[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-// ============================================================================
-// Decision Approval & Learning Interfaces
+// Approval Record & Response Interfaces
 // ============================================================================
 
 export interface ApprovalEvent {
@@ -428,13 +409,6 @@ export interface LearningWeight {
   updated_at: string;
 }
 
-export interface CreateApprovalRequest {
-  decision_id: string;
-  approved: boolean;
-  confidence_adjustment?: number;
-  timestamp?: string;
-}
-
 export interface CreateApprovalResponse {
   id: string;
   decision_id: string;
@@ -444,27 +418,25 @@ export interface CreateApprovalResponse {
 }
 
 // ============================================================================
-// Learning Decision Event Interfaces (PROMPT 0 - Learning Signal Agents)
+// Learning Event Response Interfaces
 // ============================================================================
 
-export interface LearningDecisionEvent {
-  agent_id: string;                             // Required, agent identifier
-  agent_version: string;                        // Required, agent version
-  decision_type: 'approval_learning' | 'feedback_assimilation';
-  inputs_hash: string;                          // SHA-256 of inputs
-  outputs: object;                              // Learning outputs
-  confidence: number;                           // 0-1 learning signal strength
-  constraints_applied: object;                  // Review scope, artifact type, reviewer role
-  execution_ref: string;                        // Execution reference
-  timestamp: string;                            // UTC ISO 8601
+export interface CreateApprovalLearningResponse {
+  id: string;
+  agent_id: string;
+  decision_type: 'approval_learning';
+  source_decision_id?: string;
+  normalized_signal: number;
+  created: boolean;
+  timestamp: string;
 }
 
-export interface ApprovalLearningEvent extends LearningDecisionEvent {
+export interface ApprovalLearningEvent {
   decision_type: 'approval_learning';
-  source_decision_id: string;                   // Original decision ID
-  approved: boolean;                            // Approval outcome
+  source_decision_id: string;
+  approved: boolean;
   reviewer_outcome: 'approved' | 'rejected' | 'deferred';
-  normalized_signal: number;                    // -1 to +1
+  normalized_signal: number;
   signal_metadata: {
     reviewer_role: string;
     review_scope: string;
@@ -472,11 +444,13 @@ export interface ApprovalLearningEvent extends LearningDecisionEvent {
   };
 }
 
-export interface FeedbackAssimilationEvent extends LearningDecisionEvent {
+export interface FeedbackAssimilationEvent {
+  agent_id: string;
+  agent_version: string;
   decision_type: 'feedback_assimilation';
-  source_artifact_id: string;                   // Source artifact ID
+  source_artifact_id: string;
   feedback_type: 'qualitative' | 'quantitative' | 'mixed';
-  raw_feedback: string;                         // Raw feedback content
+  raw_feedback: string;
   normalized_signals: Array<{
     dimension: string;
     value: number;
@@ -486,6 +460,55 @@ export interface FeedbackAssimilationEvent extends LearningDecisionEvent {
     feedback_source: string;
     processing_method: string;
   };
+  inputs_hash: string;
+  outputs: object;
+  confidence: number;
+  constraints_applied: object;
+  execution_ref: string;
+  timestamp: string;
+}
+
+export interface CreateFeedbackAssimilationResponse {
+  id: string;
+  agent_id: string;
+  decision_type: 'feedback_assimilation';
+  source_artifact_id: string;
+  feedback_type: 'qualitative' | 'quantitative' | 'mixed';
+  normalized_signals_count: number;
+  created: boolean;
+  timestamp: string;
+}
+
+// ============================================================================
+// Decision Events Response Interface
+// ============================================================================
+
+export interface DecisionEventsResponse {
+  events: import('../contracts').DecisionEvent[];
+  next_cursor: string | null;
+}
+
+// ============================================================================
+// Execution Status
+// ============================================================================
+
+export type ExecutionStatus = 'accepted' | 'rejected';
+
+// ============================================================================
+// List Responses
+// ============================================================================
+
+export interface CreateDecisionResponse {
+  id: string;
+  created: boolean;
+  decision: import('../contracts').DecisionRecord;
+}
+
+export interface ListDecisionsResponse {
+  data: import('../contracts').DecisionRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface CreateApprovalLearningRequest {
@@ -506,16 +529,6 @@ export interface CreateApprovalLearningRequest {
   execution_ref: string;
   inputs_hash: string;
   timestamp?: string;
-}
-
-export interface CreateApprovalLearningResponse {
-  id: string;
-  agent_id: string;
-  decision_type: 'approval_learning';
-  source_decision_id: string;
-  normalized_signal: number;
-  created: boolean;
-  timestamp: string;
 }
 
 export interface CreateFeedbackAssimilationRequest {
@@ -539,150 +552,4 @@ export interface CreateFeedbackAssimilationRequest {
   execution_ref: string;
   inputs_hash: string;
   timestamp?: string;
-}
-
-export interface CreateFeedbackAssimilationResponse {
-  id: string;
-  agent_id: string;
-  decision_type: 'feedback_assimilation';
-  source_artifact_id: string;
-  feedback_type: 'qualitative' | 'quantitative' | 'mixed';
-  normalized_signals_count: number;
-  created: boolean;
-  timestamp: string;
-}
-
-// ============================================================================
-// Decision Events API Interfaces (Execution Engine Consumption)
-// ============================================================================
-
-export type DecisionEventType =
-  | 'plan_created'
-  | 'plan_approved'
-  | 'plan_rejected'
-  | 'plan_deferred';
-
-export interface DecisionEventPayload {
-  plan_id?: string;
-  simulation_id?: string;
-  decision_id?: string;
-  objective?: string;
-  recommendation?: string;
-  confidence?: string;
-  reward?: number;
-  reviewer_outcome?: string;
-  command?: string;
-  checksum?: string;
-  confidence_adjustment?: number | null;
-  [key: string]: unknown;
-}
-
-export interface DecisionEvent {
-  id: string;
-  type: DecisionEventType;
-  timestamp: string;
-  payload: DecisionEventPayload;
-}
-
-export interface DecisionEventsResponse {
-  events: DecisionEvent[];
-  next_cursor: string | null;
-}
-
-// ============================================================================
-// Execution Authority Interfaces (Authoritative Execution Origin)
-// ruvvector-service is the ONLY authority for enterprise simulation execution_ids.
-// ============================================================================
-
-export type ExecutionStatus = 'accepted' | 'rejected';
-
-export interface ExecutionRootSpan {
-  span_id: string;
-  type: 'execution_root';
-  parent_span_id: null;
-  created_at: string;
-}
-
-export interface ExecutionLineageMetadata {
-  origin_service: 'ruvvector-service';
-  origin_version: string;
-  acceptance_timestamp: string;
-  root_span: ExecutionRootSpan;
-  caller_id: string;
-  org_id: string;
-  simulation_context: Record<string, unknown>;
-}
-
-export interface ExecutionRecord {
-  execution_id: string;
-  accepted: boolean;
-  reason: string | null;
-  caller_id: string;
-  org_id: string;
-  simulation_type: string;
-  simulation_context: Record<string, unknown>;
-  authority_signature: string;
-  root_span_id: string;
-  lineage: ExecutionLineageMetadata;
-  idempotency_key: string | null;
-  created_at: string;
-}
-
-export interface AcceptExecutionRequest {
-  caller_id: string;
-  org_id: string;
-  simulation_type: string;
-  simulation_context: Record<string, unknown>;
-  idempotency_key?: string;
-}
-
-export interface AcceptExecutionResponse {
-  execution_id: string;
-  accepted: boolean;
-  reason: string | null;
-  authority_signature: string;
-  lineage: ExecutionLineageMetadata;
-  created_at: string;
-}
-
-export interface ValidateExecutionRequest {
-  execution_id: string;
-  authority_signature: string;
-}
-
-export interface ValidateExecutionResponse {
-  valid: boolean;
-  execution_id: string;
-  reason: string | null;
-}
-
-// ============================================================================
-// Execution Authority Interfaces (POST /v1/simulations)
-// Bounded Context: Execution Authority — NOT Enterprise Simulation Domain.
-// ruvvector-service is the sole execution authority for simulation execution_ids.
-// Authority first. Enterprise validation happens downstream.
-// ============================================================================
-
-export interface AcceptanceRequest {
-  intent_description: string;
-  caller_id?: string;
-  org_id?: string;
-  simulation_type?: string;
-  simulation_context?: Record<string, unknown>;
-}
-
-export interface AcceptanceResponse {
-  execution_id: string;
-  parent_span_id: string;
-  authority: 'ruvector-service';
-  accepted: true;
-  timestamp: string;
-}
-
-export interface AuthoritySpan {
-  span_id: string;
-  type: 'authority';
-  origin: 'ruvector-service';
-  parent: null;
-  created_at: string;
 }

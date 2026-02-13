@@ -14,11 +14,15 @@
  */
 
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { DatabaseClient } from '../../clients/DatabaseClient';
-import { DecisionRecord } from '../../types';
+import {
+  ApprovalLearningRequestSchema,
+  validateContract,
+  ContractViolationError,
+} from '../../contracts';
+import type { DecisionRecord } from '../../types';
 import logger from '../../utils/logger';
 import { getOrCreateCorrelationId } from '../../utils/correlation';
 import { getSignalTypeForDecision, validateEventEmission } from '../../types/signals';
@@ -28,7 +32,7 @@ import { guardAgainstMutation } from '../../guards/immutability';
  * Learning Decision Event structure
  * Represents a single learning signal emitted by the approval learning agent
  */
-interface LearningDecisionEvent {
+interface InternalLearningDecisionEvent {
   id: string;
   agent_id: string;
   agent_version: string;
@@ -42,40 +46,30 @@ interface LearningDecisionEvent {
   created_at: string;
 }
 
-/**
- * Validation schema for approval learning input
- * Accepts approval/rejection outcomes with optional context
- */
-export const createApprovalLearningSchema = z.object({
-  decision_id: z.string().min(1).optional(), // Source decision being learned from
-  approved: z.boolean(), // Binary approval/rejection signal
-  confidence_adjustment: z.number().min(-1).max(1).optional(), // Fine-tune signal strength
-  reviewer_role: z.string().optional(), // Context: who approved/rejected
-  review_scope: z.string().optional(), // Context: what aspect was reviewed
-  artifact_type: z.string().optional(), // Context: type of artifact reviewed
-  feedback: z.string().optional(), // Optional human feedback text
-  timestamp: z.string().optional(), // Event timestamp
-});
+// Re-export contract schema for backwards compatibility
+export const createApprovalLearningSchema = ApprovalLearningRequestSchema;
 
-export type ApprovalLearningInput = z.infer<typeof createApprovalLearningSchema>;
+export type ApprovalLearningInput = {
+  decision_id?: string;
+  approved: boolean;
+  confidence_adjustment?: number;
+  reviewer_role?: string;
+  review_scope?: string;
+  artifact_type?: string;
+  feedback?: string;
+  timestamp?: string;
+};
 
 /**
  * Normalize approval signal to -1 to +1 range
- *
- * @param approved - Binary approval/rejection
- * @param confidence_adjustment - Optional adjustment factor (-1 to +1)
- * @returns Normalized signal in range [-1, +1]
  */
 export function normalizeApprovalSignal(
   approved: boolean,
   confidence_adjustment?: number
 ): number {
-  // Base signal: +1 for approval, -1 for rejection
   const baseSignal = approved ? 1.0 : -1.0;
 
-  // Apply confidence adjustment if provided
   if (confidence_adjustment !== undefined) {
-    // Adjustment modulates signal strength: 0 = no change, +1 = amplify, -1 = dampen
     const adjustmentFactor = 1.0 + confidence_adjustment;
     return Math.max(-1, Math.min(1, baseSignal * adjustmentFactor));
   }
@@ -85,13 +79,8 @@ export function normalizeApprovalSignal(
 
 /**
  * Compute deterministic SHA-256 hash of inputs
- * Ensures idempotency by identifying duplicate learning signals
- *
- * @param inputs - Input data to hash
- * @returns SHA-256 hex digest
  */
 export function computeInputsHash(inputs: Record<string, unknown>): string {
-  // Sort keys for deterministic JSON serialization
   const sortedKeys = Object.keys(inputs).sort();
   const deterministicJson = JSON.stringify(
     sortedKeys.reduce((acc, key) => {
@@ -105,18 +94,14 @@ export function computeInputsHash(inputs: Record<string, unknown>): string {
 
 /**
  * Emit learning decision event via append-only INSERT
- * Never performs UPDATE or DELETE operations
  *
  * MEMORY LAYER HARDENING:
  * - Validates signal type before emission
  * - Guards against any mutation operations
  * - Enforces append-only semantics
- *
- * @param event - Learning decision event to emit
- * @param dbClient - Database client for append-only writes
  */
 async function emitLearningDecisionEvent(
-  event: LearningDecisionEvent,
+  event: InternalLearningDecisionEvent,
   dbClient: DatabaseClient
 ): Promise<void> {
   // MEMORY LAYER: Validate event emission before proceeding
@@ -125,14 +110,12 @@ async function emitLearningDecisionEvent(
     source_type: 'approval_learning',
   });
 
-  // Get and log the signal type being emitted
   const signalType = getSignalTypeForDecision(event.decision_type);
   logger.debug(
     { eventId: event.id, signalType, decision_type: event.decision_type },
     'Emitting learning signal'
   );
 
-  // Build the query
   const query = `INSERT INTO learning_events (
       id, agent_id, agent_version, decision_type, source_id,
       outputs, inputs_hash, confidence, constraints_applied, source_type, created_at
@@ -140,10 +123,9 @@ async function emitLearningDecisionEvent(
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     ON CONFLICT (inputs_hash) DO NOTHING`;
 
-  // MEMORY LAYER: Guard against mutation (this query is safe, but we verify anyway)
+  // MEMORY LAYER: Guard against mutation
   guardAgainstMutation(query);
 
-  // Append-only INSERT with ON CONFLICT DO NOTHING for idempotency
   await dbClient.query(query, [
       event.id,
       event.agent_id,
@@ -175,8 +157,8 @@ export async function createApprovalLearningHandler(
   res.setHeader('x-correlation-id', correlationId);
 
   try {
-    // Validate request body
-    const validatedData = createApprovalLearningSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(ApprovalLearningRequestSchema, req.body);
 
     const {
       decision_id,
@@ -201,10 +183,17 @@ export async function createApprovalLearningHandler(
       if (decisionResult.rows.length > 0) {
         sourceDecision = decisionResult.rows[0];
       } else {
-        logger.warn(
-          { correlationId, decision_id },
-          'Source decision not found - proceeding without context'
+        // FAIL LOUDLY: source decision referenced but not found
+        logger.error(
+          { correlationId, decision_id, repo_name: 'ruvvector-service' },
+          'Source decision not found — cannot process approval learning without valid reference'
         );
+        res.status(400).json({
+          error: 'contract_violation',
+          message: `Source decision ${decision_id} not found`,
+          correlationId,
+        });
+        return;
       }
     }
 
@@ -222,10 +211,7 @@ export async function createApprovalLearningHandler(
       timestamp: timestamp || new Date().toISOString(),
     };
 
-    // Compute deterministic inputs hash for idempotency
     const inputsHash = computeInputsHash(inputs);
-
-    // Generate UUID for event ID (idempotency handled by inputs_hash unique constraint)
     const eventId = uuidv4();
 
     // Build output with normalized signal
@@ -241,13 +227,12 @@ export async function createApprovalLearningHandler(
     // Compute confidence based on signal strength and context availability
     let confidence = Math.abs(normalizedSignal);
     if (sourceDecision) {
-      confidence = Math.min(1.0, confidence + 0.1); // Boost confidence if source context available
+      confidence = Math.min(1.0, confidence + 0.1);
     }
     if (reviewer_role && reviewer_role !== 'unknown') {
-      confidence = Math.min(1.0, confidence + 0.05); // Boost confidence if reviewer role known
+      confidence = Math.min(1.0, confidence + 0.05);
     }
 
-    // Build constraints applied metadata
     const constraintsApplied = {
       reviewer_role: reviewer_role || 'unknown',
       review_scope: review_scope || 'general',
@@ -256,8 +241,7 @@ export async function createApprovalLearningHandler(
       has_feedback: !!feedback,
     };
 
-    // Create learning decision event
-    const learningEvent: LearningDecisionEvent = {
+    const learningEvent: InternalLearningDecisionEvent = {
       id: eventId,
       agent_id: 'approval-learning-agent',
       agent_version: '1.0.0',
@@ -283,11 +267,11 @@ export async function createApprovalLearningHandler(
         normalizedSignal,
         confidence,
         inputsHash,
+        repo_name: 'ruvvector-service',
       },
       'Approval learning signal emitted'
     );
 
-    // Return deterministic, machine-readable output
     res.status(201).json({
       id: eventId,
       decision_type: 'approval_learning',
@@ -298,21 +282,18 @@ export async function createApprovalLearningHandler(
       learning_applied: true,
     });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Approval learning validation failed');
+    if (error instanceof ContractViolationError) {
+      logger.warn({ correlationId, errors: error.details }, 'Approval learning contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to process approval learning');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to process approval learning');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to process approval learning',

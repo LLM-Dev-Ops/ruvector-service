@@ -9,9 +9,16 @@
  * Authority first. Enterprise validation happens downstream.
  */
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
-import { AcceptanceResponse, AuthoritySpan } from '../types';
+import {
+  AcceptanceRequestSchema,
+  AuthoritySpanSchema,
+  LineageSeedSchema,
+  validateContract,
+  validateSpanIntegrity,
+  ContractViolationError,
+} from '../contracts';
+import type { AcceptanceResponse, AuthoritySpan } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
 import {
@@ -45,17 +52,8 @@ export function normalizePayload(body: Record<string, unknown>): Record<string, 
   return body;
 }
 
-// ============================================================================
-// AcceptanceRequestSchema
-// ============================================================================
-
-export const acceptanceRequestSchema = z.object({
-  intent_description: z.string().min(1).max(2000),
-  caller_id: z.string().min(1).max(255).optional(),
-  org_id: z.string().min(1).max(255).optional(),
-  simulation_type: z.string().min(1).max(100).optional(),
-  simulation_context: z.record(z.unknown()).optional(),
-});
+// Re-export contract schema for backwards compatibility
+export const acceptanceRequestSchema = AcceptanceRequestSchema;
 
 // ============================================================================
 // POST /v1/simulations — Mint execution authority
@@ -75,8 +73,8 @@ export async function acceptSimulationHandler(
     // Normalize — map intent/scenario/description → intent_description
     const normalized = normalizePayload(req.body || {});
 
-    // Validate — only intent_description is required
-    const validatedData = acceptanceRequestSchema.parse(normalized);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(AcceptanceRequestSchema, normalized);
 
     const {
       intent_description,
@@ -95,12 +93,19 @@ export async function acceptSimulationHandler(
     const rootSpan: AuthoritySpan = {
       span_id: rootSpanId,
       type: 'authority',
-      origin: 'ruvector-service',
+      origin: 'ruvvector-service',
       parent: null,
       created_at: now,
     };
 
-    // Persist lineage seed
+    // SPAN INTEGRITY: Validate authority span against contract schema
+    validateContract(AuthoritySpanSchema, rootSpan);
+    validateSpanIntegrity({
+      span_id: rootSpan.span_id,
+      parent_span_id: rootSpan.parent,
+    });
+
+    // Persist lineage seed — contract-aligned structure
     const lineageSeed = {
       root_span: rootSpan,
       intent_description,
@@ -108,6 +113,9 @@ export async function acceptSimulationHandler(
       ...(org_id && { org_id }),
       ...(simulation_context && { simulation_context }),
     };
+
+    // LINEAGE STORAGE: Validate lineage seed against contract schema before storage
+    validateContract(LineageSeedSchema, lineageSeed);
 
     await dbClient.query(
       `INSERT INTO executions (execution_id, accepted, reason, caller_id, org_id,
@@ -140,6 +148,7 @@ export async function acceptSimulationHandler(
         correlationId,
         executionId,
         rootSpanId,
+        repo_name: 'ruvvector-service',
         durationMs: Date.now() - startTime,
       },
       'Execution authority minted'
@@ -148,7 +157,7 @@ export async function acceptSimulationHandler(
     const response: AcceptanceResponse = {
       execution_id: executionId,
       parent_span_id: rootSpanId,
-      authority: 'ruvector-service',
+      authority: 'ruvvector-service',
       accepted: true,
       timestamp: now,
     };
@@ -158,24 +167,21 @@ export async function acceptSimulationHandler(
     const duration = (Date.now() - startTime) / 1000;
     simulationAcceptanceDuration.observe(duration);
 
-    if (error instanceof z.ZodError) {
+    if (error instanceof ContractViolationError) {
       simulationAcceptanceTotal.inc({ status: 'rejected' });
 
-      logger.warn({ correlationId, errors: error.errors }, 'Acceptance validation failed');
+      logger.warn({ correlationId, errors: error.details }, 'Acceptance contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'intent_description is required',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
     // FAIL CLOSED: lineage persistence failure → no execution authority exists
-    logger.error({ correlationId, error }, 'Lineage persistence failed');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Lineage persistence failed');
     res.status(500).json({
       error: 'internal_error',
       message: 'Lineage persistence failed',

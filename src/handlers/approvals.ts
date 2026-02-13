@@ -3,10 +3,14 @@
  * Implements approval-based reinforcement learning for executive synthesis
  */
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import {
+  CreateApprovalRequestSchema,
+  validateContract,
+  ContractViolationError,
+} from '../contracts';
+import type {
   DecisionRecord,
   CreateApprovalResponse,
 } from '../types';
@@ -16,14 +20,8 @@ import { getOrCreateCorrelationId } from '../utils/correlation';
 // Learning rate for weight updates
 const LEARNING_RATE = 0.1;
 
-// Validation schema for approval event
-export const createApprovalSchema = z.object({
-  decision_id: z.string().min(1),           // Accept any string ID format
-  approved: z.boolean(),
-  confidence_adjustment: z.number().min(-1).max(1).optional(),
-  advisory: z.boolean().optional().default(false),  // Advisory approvals don't trigger execution
-  timestamp: z.string().optional(),
-});
+// Re-export contract schema for backwards compatibility
+export const createApprovalSchema = CreateApprovalRequestSchema;
 
 /**
  * Extract recommendation type from recommendation string
@@ -73,8 +71,8 @@ export async function createApprovalHandler(
   res.setHeader('x-correlation-id', correlationId);
 
   try {
-    // Validate request body
-    const validatedData = createApprovalSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(CreateApprovalRequestSchema, req.body);
 
     const {
       decision_id,
@@ -239,21 +237,18 @@ export async function createApprovalHandler(
 
     res.status(201).json(response);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Approval validation failed');
+    if (error instanceof ContractViolationError) {
+      logger.warn({ correlationId, errors: error.details }, 'Approval contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to process approval');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to process approval');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to process approval',

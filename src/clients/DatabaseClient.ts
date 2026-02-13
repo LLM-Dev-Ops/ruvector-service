@@ -121,7 +121,8 @@ export class DatabaseClient {
           await this.pool.query('DROP TABLE IF EXISTS decisions CASCADE');
         }
       } catch (migrationError) {
-        logger.warn({ error: migrationError }, 'Migration check failed, continuing');
+        logger.error({ error: migrationError, repo_name: 'ruvvector-service' }, 'Migration check failed');
+        throw migrationError;
       }
 
       await this.pool.query(`
@@ -340,9 +341,14 @@ export class DatabaseClient {
 
       // Migration: relax NOT NULL constraints for lightweight authority minting (POST /v1/simulations)
       // These columns are optional when minting execution authority with only intent_description.
-      await this.pool.query(`ALTER TABLE executions ALTER COLUMN caller_id DROP NOT NULL`).catch(() => {});
-      await this.pool.query(`ALTER TABLE executions ALTER COLUMN org_id DROP NOT NULL`).catch(() => {});
-      await this.pool.query(`ALTER TABLE executions ALTER COLUMN simulation_type DROP NOT NULL`).catch(() => {});
+      try {
+        await this.pool.query(`ALTER TABLE executions ALTER COLUMN caller_id DROP NOT NULL`);
+        await this.pool.query(`ALTER TABLE executions ALTER COLUMN org_id DROP NOT NULL`);
+        await this.pool.query(`ALTER TABLE executions ALTER COLUMN simulation_type DROP NOT NULL`);
+      } catch (migrationErr) {
+        // Column may already be nullable — log and continue
+        logger.info({ error: migrationErr }, 'Nullable column migration already applied or not needed');
+      }
 
       // Indexes for executions
       await this.pool.query(`

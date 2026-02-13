@@ -15,11 +15,16 @@
  * - CLI-invokable with 'assimilate' endpoint
  */
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { DatabaseClient } from '../../clients/DatabaseClient';
 import {
+  FeedbackAssimilationRequestSchema,
+  validateContract,
+  ContractViolationError,
+} from '../../contracts';
+import type { FeedbackSignal } from '../../contracts';
+import type {
   FeedbackAssimilationEvent,
   CreateFeedbackAssimilationResponse,
 } from '../../types';
@@ -28,46 +33,11 @@ import { getOrCreateCorrelationId } from '../../utils/correlation';
 import { getSignalTypeForDecision, validateEventEmission } from '../../types/signals';
 import { guardAgainstMutation } from '../../guards/immutability';
 
-// ============================================================================
-// Type Definitions
-// ============================================================================
+// Re-export contract schema for backwards compatibility
+export const createFeedbackAssimilationSchema = FeedbackAssimilationRequestSchema;
 
-export interface FeedbackSignal {
-  dimension: string;       // e.g., "quality", "clarity", "accuracy", "completeness"
-  value: number;          // -1.0 to +1.0
-  confidence: number;     // 0.0 to 1.0
-}
-
-// ============================================================================
-// Validation Schemas
-// ============================================================================
-
-/**
- * Zod schema for feedback assimilation request
- * Maps to CreateFeedbackAssimilationRequest from types
- */
-export const createFeedbackAssimilationSchema = z.object({
-  agent_id: z.string().default('feedback-assimilation-agent'),
-  agent_version: z.string().default('1.0.0'),
-  source_artifact_id: z.string().min(1),
-  feedback_type: z.enum(['qualitative', 'quantitative', 'mixed']),
-  raw_feedback: z.string().min(1),
-  normalized_signals: z.array(z.object({
-    dimension: z.string(),
-    value: z.number().min(-1).max(1),
-    confidence: z.number().min(0).max(1),
-  })).optional(),
-  assimilation_metadata: z.object({
-    feedback_source: z.string(),
-    processing_method: z.string(),
-  }),
-  outputs: z.object({}).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-  constraints_applied: z.object({}).optional(),
-  execution_ref: z.string().optional(),
-  inputs_hash: z.string().optional(),
-  timestamp: z.string().optional(),
-});
+// Re-export FeedbackSignal type
+export type { FeedbackSignal };
 
 // ============================================================================
 // Core Logic Functions
@@ -321,8 +291,8 @@ export async function createFeedbackAssimilationHandler(
   res.setHeader('x-correlation-id', correlationId);
 
   try {
-    // Validate request body
-    const validatedData = createFeedbackAssimilationSchema.parse(req.body);
+    // MANDATORY: Runtime validation against contracts schema
+    const validatedData = validateContract(FeedbackAssimilationRequestSchema, req.body);
 
     const {
       agent_id = 'feedback-assimilation-agent',
@@ -439,21 +409,18 @@ export async function createFeedbackAssimilationHandler(
 
     res.status(201).json(response);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Feedback assimilation validation failed');
+    if (error instanceof ContractViolationError) {
+      logger.warn({ correlationId, errors: error.details }, 'Feedback assimilation contract violation');
       res.status(400).json({
-        error: 'validation_error',
-        message: 'Request validation failed',
+        error: 'contract_violation',
+        message: error.message,
         correlationId,
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: error.details,
       });
       return;
     }
 
-    logger.error({ correlationId, error }, 'Failed to assimilate feedback');
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to assimilate feedback');
     res.status(500).json({
       error: 'internal_error',
       message: 'Failed to assimilate feedback',

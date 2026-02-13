@@ -90,18 +90,12 @@ export function assertRequiredEnvVars(): AssertionResult {
       'STARTUP ASSERTION FAILED: Required environment variables missing'
     );
 
-    // CRASH in production if critical vars missing
-    if (isProduction) {
-      throw new Error(
-        `FATAL: Required environment variables missing: ${missing.join(', ')}. ` +
-        `Service cannot start safely in production without these values.`
-      );
-    } else {
-      logger.warn(
-        { missing },
-        'Running in development mode with missing env vars - using defaults'
-      );
-    }
+    // CRASH on missing env vars — NO partial operation allowed
+    throw new Error(
+      `FATAL: Required environment variables missing: ${missing.join(', ')}. ` +
+      `Service cannot start safely without these values. ` +
+      `DO NOT allow partial operation.`
+    );
   }
 
   if (warnings.length > 0) {
@@ -148,12 +142,12 @@ export function assertPerformanceBudget(): number {
  */
 export function assertExecutionAuthority(): void {
   const secret = process.env.EXECUTION_HMAC_SECRET;
-  const isProduction = process.env.NODE_ENV === 'production';
 
-  if (isProduction && (!secret || secret.length < 32)) {
+  if (!secret || secret.length < 1) {
     throw new Error(
-      'FATAL: EXECUTION_HMAC_SECRET must be at least 32 characters in production. ' +
-      'This service is the authoritative execution origin - signing key is critical.'
+      'FATAL: EXECUTION_HMAC_SECRET is required. ' +
+      'This service is the authoritative execution origin — signing key is critical. ' +
+      'DO NOT allow partial operation without execution authority configuration.'
     );
   }
 
@@ -161,7 +155,8 @@ export function assertExecutionAuthority(): void {
     {
       role: 'AUTHORITATIVE_EXECUTION_ORIGIN',
       hmac_algorithm: 'SHA-256',
-      secret_configured: !!secret && secret.length >= 32,
+      secret_configured: true,
+      secret_length: secret.length,
     },
     'Execution authority configuration asserted'
   );
