@@ -59,7 +59,7 @@ import {
   createApprovalLearningHandler,
   createFeedbackAssimilationHandler,
 } from './handlers/learning';
-import { listDecisionEventsHandler } from './handlers/decisionEvents';
+import { listDecisionEventsHandler, ingestDecisionEventHandler } from './handlers/decisionEvents';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -103,6 +103,12 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
 
   // Basic middleware (applied to all OTHER routes)
   app.use(express.json({ limit: '10mb' }));
+
+  // POST /events/decisions - Ingest decision events from orchestration
+  // Registered AFTER express.json() because it requires body parsing
+  app.post('/events/decisions', (req, res, next) => {
+    ingestDecisionEventHandler(req, res, dbClient).catch(next);
+  });
 
   // Metrics middleware for all requests
   app.use(metricsMiddleware);

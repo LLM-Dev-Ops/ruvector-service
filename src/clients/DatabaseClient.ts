@@ -373,6 +373,30 @@ export class DatabaseClient {
         ON executions(idempotency_key) WHERE idempotency_key IS NOT NULL
       `);
 
+      // Create decision_events_ingested table for externally published decision events
+      // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS decision_events_ingested (
+          id UUID PRIMARY KEY,
+          type VARCHAR(100) NOT NULL,
+          run_id TEXT NOT NULL,
+          source TEXT,
+          timestamp TIMESTAMPTZ NOT NULL,
+          payload JSONB NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_decision_events_ingested_created_at
+        ON decision_events_ingested(created_at ASC, id ASC)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_decision_events_ingested_type
+        ON decision_events_ingested(type)
+      `);
+
       this.initialized = true;
       logger.info('Database initialized successfully');
     } catch (error) {

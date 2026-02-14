@@ -2,10 +2,12 @@
  * Decision Events API Handler
  * Exposes DecisionEvent consumption API for downstream execution engines
  *
- * Endpoint: GET /events/decisions
- * Purpose: Allow execution engines to poll for approved plans and execution-relevant events
+ * Endpoints:
+ *   GET  /events/decisions - Poll for decision events (execution engines)
+ *   POST /events/decisions - Ingest decision events (orchestration)
  */
 import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
@@ -328,6 +330,59 @@ export async function listDecisionEventsHandler(
       }
     }
 
+    // Query for externally ingested decision events from decision_events_ingested table
+    {
+      let ingestedQuery = `
+        SELECT id, type, run_id, source, timestamp, payload, created_at
+        FROM decision_events_ingested
+      `;
+      const ingestedParams: unknown[] = [];
+      let paramIndex = 1;
+      const conditions: string[] = [];
+
+      // Filter by requested event types
+      conditions.push(`type = ANY($${paramIndex})`);
+      ingestedParams.push(eventTypes);
+      paramIndex++;
+
+      // Apply cursor filter if provided
+      if (cursor) {
+        const cursorParts = parseCursor(cursor);
+        if (cursorParts) {
+          conditions.push(`(created_at, id::text) > ($${paramIndex}, $${paramIndex + 1})`);
+          ingestedParams.push(cursorParts.timestamp, cursorParts.id);
+          paramIndex += 2;
+        }
+      }
+
+      ingestedQuery += ` WHERE ${conditions.join(' AND ')}`;
+      ingestedQuery += ` ORDER BY created_at ASC, id ASC LIMIT $${paramIndex}`;
+      ingestedParams.push(parsedLimit);
+
+      const ingestedResult = await dbClient.query<{
+        id: string;
+        type: string;
+        run_id: string;
+        source: string | null;
+        timestamp: Date;
+        payload: Record<string, unknown>;
+        created_at: Date;
+      }>(ingestedQuery, ingestedParams);
+
+      for (const row of ingestedResult.rows) {
+        events.push({
+          id: buildEventId(row.type, row.id, row.created_at),
+          type: row.type as DecisionEventType,
+          timestamp: new Date(row.timestamp).toISOString(),
+          payload: {
+            ...row.payload,
+            run_id: row.run_id,
+            source: row.source,
+          },
+        });
+      }
+    }
+
     // Sort all events by timestamp (ascending) for stable ordering
     events.sort((a, b) => {
       const timeA = new Date(a.timestamp).getTime();
@@ -407,6 +462,75 @@ function parseCursor(cursor: string): { type: string; id: string; timestamp: Dat
   }
 }
 
+/**
+ * POST /events/decisions - Ingest a decision event from orchestration
+ *
+ * Request Body:
+ * {
+ *   type: string,       // required
+ *   runId: string,      // required
+ *   source: string,     // optional
+ *   timestamp: string,  // required (ISO 8601)
+ *   payload: object     // optional
+ * }
+ *
+ * Response: 201
+ * {
+ *   status: "accepted",
+ *   eventId: "<generated-uuid>"
+ * }
+ */
+export async function ingestDecisionEventHandler(
+  req: Request,
+  res: Response,
+  dbClient: DatabaseClient
+): Promise<void> {
+  try {
+    const { type, runId, source, timestamp, payload } = req.body || {};
+
+    // Validate required fields
+    const missing: string[] = [];
+    if (!type) missing.push('type');
+    if (!runId) missing.push('runId');
+    if (!timestamp) missing.push('timestamp');
+
+    if (missing.length > 0) {
+      res.status(400).json({
+        error: 'validation_error',
+        message: `Missing required fields: ${missing.join(', ')}`,
+      });
+      return;
+    }
+
+    const eventId = randomUUID();
+
+    await dbClient.query(
+      `INSERT INTO decision_events_ingested (id, type, run_id, source, timestamp, payload)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [eventId, type, runId, source || null, timestamp, JSON.stringify(payload || {})]
+    );
+
+    logger.info(
+      { type, runId, eventId },
+      '[ruvvector] decision received type=%s runId=%s',
+      type,
+      runId
+    );
+
+    res.status(201).json({
+      status: 'accepted',
+      eventId,
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to ingest decision event');
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Failed to ingest decision event',
+    });
+  }
+}
+
 export default {
   listDecisionEventsHandler,
+  ingestDecisionEventHandler,
 };
