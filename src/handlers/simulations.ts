@@ -204,7 +204,21 @@ export async function getSimulationHandler(
 
   const { id } = req.params;
 
+  // Callers may use the ruvector-span-{uuid} format (derived from root_span_id)
+  // or the canonical exec-{uuid} execution_id. Support both.
+  const SPAN_PREFIX = 'ruvector-span-';
+  const spanId = id.startsWith(SPAN_PREFIX) ? id.slice(SPAN_PREFIX.length) : null;
+
   try {
+    // Build query based on ID format to avoid type mismatch on UUID column
+    const query = spanId
+      ? `SELECT execution_id, accepted, caller_id, org_id, simulation_type,
+                simulation_context, root_span_id, lineage, created_at
+         FROM executions WHERE root_span_id = $1 LIMIT 1`
+      : `SELECT execution_id, accepted, caller_id, org_id, simulation_type,
+                simulation_context, root_span_id, lineage, created_at
+         FROM executions WHERE execution_id = $1 LIMIT 1`;
+
     const result = await dbClient.query<{
       execution_id: string;
       accepted: boolean;
@@ -215,12 +229,7 @@ export async function getSimulationHandler(
       root_span_id: string;
       lineage: Record<string, unknown>;
       created_at: string;
-    }>(
-      `SELECT execution_id, accepted, caller_id, org_id, simulation_type,
-              simulation_context, root_span_id, lineage, created_at
-       FROM executions WHERE execution_id = $1`,
-      [id]
-    );
+    }>(query, [spanId ?? id]);
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Simulation not found', id });
@@ -229,8 +238,10 @@ export async function getSimulationHandler(
 
     const row = result.rows[0];
 
+    const simulationId = `ruvector-span-${row.root_span_id}`;
+
     const simulation = {
-      id: row.execution_id,
+      id: simulationId,
       name: row.lineage?.intent_description ?? row.simulation_type ?? row.execution_id,
       status: row.accepted ? 'completed' : 'rejected',
       plan_id: row.root_span_id,
