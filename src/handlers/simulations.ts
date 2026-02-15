@@ -1,12 +1,11 @@
 /**
+ * Simulations API Handlers
+ *
  * POST /v1/simulations — Execution Authority Minting Gate
+ * GET  /v1/simulations/:id — Retrieve a stored simulation by execution ID
  *
  * Bounded Context: Execution Authority
  * ruvvector-service is the sole execution authority.
- *
- * This endpoint ONLY mints execution authority.
- * It does NOT validate enterprise policy, compute cost, or run simulation logic.
- * Authority first. Enterprise validation happens downstream.
  */
 import { Request, Response } from 'express';
 import { DatabaseClient } from '../clients/DatabaseClient';
@@ -18,6 +17,7 @@ import {
   validateSpanIntegrity,
   ContractViolationError,
 } from '../contracts';
+import { buildExecutionMetadata } from '../utils/executionMetadata';
 import type { AcceptanceResponse, AuthoritySpan } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
@@ -190,7 +190,78 @@ export async function acceptSimulationHandler(
   }
 }
 
+// ============================================================================
+// GET /v1/simulations/:id — Retrieve simulation by execution ID
+// ============================================================================
+
+export async function getSimulationHandler(
+  req: Request,
+  res: Response,
+  dbClient: DatabaseClient
+): Promise<void> {
+  const correlationId = getOrCreateCorrelationId(req.headers);
+  res.setHeader('x-correlation-id', correlationId);
+
+  const { id } = req.params;
+
+  try {
+    const result = await dbClient.query<{
+      execution_id: string;
+      accepted: boolean;
+      caller_id: string | null;
+      org_id: string | null;
+      simulation_type: string | null;
+      simulation_context: Record<string, unknown>;
+      root_span_id: string;
+      lineage: Record<string, unknown>;
+      created_at: string;
+    }>(
+      `SELECT execution_id, accepted, caller_id, org_id, simulation_type,
+              simulation_context, root_span_id, lineage, created_at
+       FROM executions WHERE execution_id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Simulation not found', id });
+      return;
+    }
+
+    const row = result.rows[0];
+
+    const simulation = {
+      id: row.execution_id,
+      name: row.lineage?.intent_description ?? row.simulation_type ?? row.execution_id,
+      status: row.accepted ? 'completed' : 'rejected',
+      plan_id: row.root_span_id,
+      iterations: 1,
+      created_at: row.created_at,
+      completed_at: row.created_at,
+      results: {
+        caller_id: row.caller_id,
+        org_id: row.org_id,
+        simulation_type: row.simulation_type,
+        simulation_context: row.simulation_context,
+        lineage: row.lineage,
+      },
+    };
+
+    res.status(200).json({
+      simulation,
+      execution_metadata: buildExecutionMetadata(req),
+    });
+  } catch (error) {
+    logger.error({ correlationId, error, id }, 'Failed to retrieve simulation');
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Failed to retrieve simulation',
+      correlationId,
+    });
+  }
+}
+
 export default {
   acceptSimulationHandler,
+  getSimulationHandler,
   acceptanceRequestSchema,
 };

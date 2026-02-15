@@ -54,7 +54,7 @@ import {
   listExecutionsHandler,
   validateExecutionHandler,
 } from './handlers/executions';
-import { acceptSimulationHandler } from './handlers/simulations';
+import { acceptSimulationHandler, getSimulationHandler } from './handlers/simulations';
 import {
   createApprovalLearningHandler,
   createFeedbackAssimilationHandler,
@@ -295,6 +295,11 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   // POST /v1/simulations - Accept simulation intent from agentics-cli
   app.post('/v1/simulations', (req, res, next) => {
     acceptSimulationHandler(req, res, dbClient).catch(next);
+  });
+
+  // GET /v1/simulations/:id - Retrieve a stored simulation by execution ID
+  app.get('/v1/simulations/:id', (req, res, next) => {
+    getSimulationHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================
