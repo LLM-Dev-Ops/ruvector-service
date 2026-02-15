@@ -60,6 +60,13 @@ import {
   createFeedbackAssimilationHandler,
 } from './handlers/learning';
 import { listDecisionEventsHandler, ingestDecisionEventHandler } from './handlers/decisionEvents';
+import {
+  createLineageHandler,
+  getLineageBySimulationHandler,
+  getLineageByArtifactHandler,
+} from './handlers/lineage';
+import { createErpMappingHandler, listErpMappingsHandler } from './handlers/erpMappings';
+import { createIntegrationProposalHandler, listIntegrationProposalsHandler } from './handlers/integrationProposals';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -230,6 +237,53 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   // POST /v1/executions/validate - Validate execution_id + authority signature
   app.post('/v1/executions/validate', (req, res, next) => {
     validateExecutionHandler(req, res, dbClient).catch(next);
+  });
+
+  // ============================================================================
+  // Lineage API - /v1/lineage endpoints (in-memory storage)
+  // ============================================================================
+
+  // POST /v1/lineage - Store a lineage record
+  app.post('/v1/lineage', (req, res, next) => {
+    createLineageHandler(req, res).catch(next);
+  });
+
+  // GET /v1/lineage/simulation/:simulationId/artifacts - Get lineage records for a simulation
+  app.get('/v1/lineage/simulation/:simulationId/artifacts', (req, res, next) => {
+    getLineageBySimulationHandler(req, res).catch(next);
+  });
+
+  // GET /v1/lineage/artifact/:artifactId - Get lineage for a specific artifact
+  app.get('/v1/lineage/artifact/:artifactId', (req, res, next) => {
+    getLineageByArtifactHandler(req, res).catch(next);
+  });
+
+  // ============================================================================
+  // ERP Mappings API - /v1/erp-mappings endpoints (in-memory storage)
+  // ============================================================================
+
+  // POST /v1/erp-mappings - Store ERP surface mapping
+  app.post('/v1/erp-mappings', (req, res, next) => {
+    createErpMappingHandler(req, res).catch(next);
+  });
+
+  // GET /v1/erp-mappings - List ERP mappings (with optional simulation_id filter)
+  app.get('/v1/erp-mappings', (req, res, next) => {
+    listErpMappingsHandler(req, res).catch(next);
+  });
+
+  // ============================================================================
+  // Integration Proposals API - /v1/integration-proposals endpoints (in-memory storage)
+  // ============================================================================
+
+  // POST /v1/integration-proposals - Store integration proposal
+  app.post('/v1/integration-proposals', (req, res, next) => {
+    createIntegrationProposalHandler(req, res).catch(next);
+  });
+
+  // GET /v1/integration-proposals - List proposals (with optional simulation_id filter)
+  app.get('/v1/integration-proposals', (req, res, next) => {
+    listIntegrationProposalsHandler(req, res).catch(next);
   });
 
   // ============================================================================

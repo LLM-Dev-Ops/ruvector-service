@@ -11,11 +11,10 @@ import {
 } from '../contracts';
 import type {
   DecisionRecord,
-  CreateDecisionResponse,
-  ListDecisionsResponse,
 } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
+import { buildExecutionMetadata } from '../utils/executionMetadata';
 
 // Re-export contract schema for backwards compatibility
 export const createDecisionSchema = CreateDecisionRequestSchema;
@@ -84,28 +83,11 @@ export async function createDecisionHandler(
       'Decision stored successfully'
     );
 
-    // Build the stored decision for response
-    const storedDecision: DecisionRecord = {
+    res.status(201).json({
+      accepted: true,
       id,
-      objective,
-      command,
-      raw_output_hash,
-      recommendation,
-      confidence,
-      signals,
-      embedding_text,
-      embedding: null,
-      graph_relations,
-      created_at: createdAt,
-    };
-
-    const response: CreateDecisionResponse = {
-      id,
-      created: true,
-      decision: storedDecision,
-    };
-
-    res.status(201).json(response);
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     if (error instanceof ContractViolationError) {
       logger.warn({ correlationId, errors: error.details }, 'Decision contract violation');
@@ -184,7 +166,10 @@ export async function getDecisionHandler(
     };
 
     logger.info({ correlationId, decisionId: id }, 'Decision retrieved successfully');
-    res.status(200).json(decision);
+    res.status(200).json({
+      ...decision,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to retrieve decision');
     res.status(500).json({
@@ -269,14 +254,10 @@ export async function listDecisionsHandler(
       'Decisions listed successfully'
     );
 
-    const response: ListDecisionsResponse = {
-      data: decisions,
-      total,
-      limit: parsedLimit,
-      offset: parsedOffset,
-    };
-
-    res.status(200).json(response);
+    res.status(200).json({
+      decisions,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to list decisions');
     res.status(500).json({

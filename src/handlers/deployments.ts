@@ -7,14 +7,12 @@ import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import {
   Deployment,
-  CreateDeploymentResponse,
-  ListDeploymentsResponse,
-  DeleteDeploymentResponse,
   DeploymentEnvironment,
   DeploymentStatus,
 } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
+import { buildExecutionMetadata } from '../utils/executionMetadata';
 
 // Valid enum values
 const VALID_ENVIRONMENTS: DeploymentEnvironment[] = ['development', 'staging', 'production'];
@@ -133,12 +131,14 @@ export async function createDeploymentHandler(
 
     logger.info({ correlationId, deploymentId: id, environment, status }, 'Deployment stored successfully');
 
-    const response: CreateDeploymentResponse = {
-      id,
-      created: true,
-    };
+    const executionMetadata = buildExecutionMetadata(req);
 
-    res.status(201).json(response);
+    res.status(201).json({
+      accepted: true,
+      id,
+      timestamp: executionMetadata.timestamp,
+      execution_metadata: executionMetadata,
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       logger.warn({ correlationId, errors: error.errors }, 'Deployment validation failed');
@@ -218,7 +218,10 @@ export async function getDeploymentHandler(
     };
 
     logger.info({ correlationId, deploymentId: id }, 'Deployment retrieved successfully');
-    res.status(200).json(deployment);
+    res.status(200).json({
+      ...deployment,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to retrieve deployment');
     res.status(500).json({
@@ -357,7 +360,11 @@ export async function updateDeploymentHandler(
     };
 
     logger.info({ correlationId, deploymentId: id, newVersion: deployment.version }, 'Deployment updated successfully');
-    res.status(200).json(deployment);
+    res.status(200).json({
+      updated: true,
+      id,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       logger.warn({ correlationId, errors: error.errors }, 'Deployment update validation failed');
@@ -474,14 +481,11 @@ export async function listDeploymentsHandler(
       'Deployments listed successfully'
     );
 
-    const response: ListDeploymentsResponse = {
-      data: deployments,
+    res.status(200).json({
+      deployments,
       total,
-      limit: parsedLimit,
-      offset: parsedOffset,
-    };
-
-    res.status(200).json(response);
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to list deployments');
     res.status(500).json({
@@ -530,12 +534,11 @@ export async function deleteDeploymentHandler(
 
     logger.info({ correlationId, deploymentId: id }, 'Deployment deleted successfully');
 
-    const response: DeleteDeploymentResponse = {
+    res.status(200).json({
       deleted: true,
       id,
-    };
-
-    res.status(200).json(response);
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to delete deployment');
     res.status(500).json({

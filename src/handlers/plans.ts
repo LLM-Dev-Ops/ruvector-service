@@ -5,9 +5,10 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { DatabaseClient } from '../clients/DatabaseClient';
-import { RuvectorPlan, CreatePlanResponse, ListPlansResponse, DeletePlanResponse } from '../types';
+import { RuvectorPlan } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
+import { buildExecutionMetadata } from '../utils/executionMetadata';
 
 // Validation schema for creating a plan
 export const createPlanSchema = z.object({
@@ -51,12 +52,14 @@ export async function createPlanHandler(
 
     logger.info({ correlationId, planId: id, orgId: org_id }, 'Plan stored successfully');
 
-    const response: CreatePlanResponse = {
-      success: true,
-      id,
-    };
+    const executionMetadata = buildExecutionMetadata(req);
 
-    res.status(201).json(response);
+    res.status(201).json({
+      accepted: true,
+      id,
+      timestamp: executionMetadata.timestamp,
+      execution_metadata: executionMetadata,
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       logger.warn({ correlationId, errors: error.errors }, 'Plan validation failed');
@@ -135,7 +138,10 @@ export async function getPlanHandler(
     };
 
     logger.info({ correlationId, planId: id }, 'Plan retrieved successfully');
-    res.status(200).json(response);
+    res.status(200).json({
+      ...response,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to retrieve plan');
     res.status(500).json({
@@ -195,8 +201,26 @@ export async function listPlansHandler(
       'Plans listed successfully'
     );
 
-    const response: ListPlansResponse = { plans };
-    res.status(200).json(response);
+    // Get total count
+    let countQuery: string;
+    let countParams: unknown[];
+
+    if (org_id && typeof org_id === 'string') {
+      countQuery = `SELECT COUNT(*) as total FROM plans WHERE org_id = $1`;
+      countParams = [org_id];
+    } else {
+      countQuery = `SELECT COUNT(*) as total FROM plans`;
+      countParams = [];
+    }
+
+    const countResult = await dbClient.query<{ total: string }>(countQuery, countParams);
+    const total = parseInt(countResult.rows[0]?.total || '0', 10);
+
+    res.status(200).json({
+      plans,
+      total,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to list plans');
     res.status(500).json({
@@ -247,8 +271,11 @@ export async function deletePlanHandler(
 
     logger.info({ correlationId, planId: id }, 'Plan deleted successfully');
 
-    const response: DeletePlanResponse = { success: true };
-    res.status(200).json(response);
+    res.status(200).json({
+      deleted: true,
+      id,
+      execution_metadata: buildExecutionMetadata(req),
+    });
   } catch (error) {
     logger.error({ correlationId, error }, 'Failed to delete plan');
     res.status(500).json({
