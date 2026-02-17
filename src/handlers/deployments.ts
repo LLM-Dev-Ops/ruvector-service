@@ -13,6 +13,7 @@ import {
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
 import { buildExecutionMetadata } from '../utils/executionMetadata';
+import { fireDeploymentChangedHooks } from '../utils/hooks';
 
 // Valid enum values
 const VALID_ENVIRONMENTS: DeploymentEnvironment[] = ['development', 'staging', 'production'];
@@ -132,6 +133,12 @@ export async function createDeploymentHandler(
     logger.info({ correlationId, deploymentId: id, environment, status }, 'Deployment stored successfully');
 
     const executionMetadata = buildExecutionMetadata(req);
+
+    // Fire non-blocking post-store hooks to core bundles
+    fireDeploymentChangedHooks(
+      { deployment_id: id, status, environment },
+      executionMetadata.trace_id
+    );
 
     res.status(201).json({
       accepted: true,
@@ -259,9 +266,9 @@ export async function updateDeploymentHandler(
     // Validate request body
     const validatedData = updateDeploymentSchema.parse(req.body);
 
-    // Check if deployment exists and get current version
+    // Check if deployment exists and get current version + status
     const existingResult = await dbClient.query<Deployment>(
-      'SELECT id, version FROM deployments WHERE id = $1',
+      'SELECT id, version, status, environment FROM deployments WHERE id = $1',
       [id]
     );
 
@@ -273,6 +280,8 @@ export async function updateDeploymentHandler(
     }
 
     const currentVersion = existingResult.rows[0].version;
+    const previousStatus = existingResult.rows[0].status;
+    const existingEnvironment = existingResult.rows[0].environment;
 
     // Check for version conflict (optimistic locking)
     if (validatedData.version !== undefined && validatedData.version !== currentVersion + 1) {
@@ -360,10 +369,24 @@ export async function updateDeploymentHandler(
     };
 
     logger.info({ correlationId, deploymentId: id, newVersion: deployment.version }, 'Deployment updated successfully');
+
+    const executionMetadata = buildExecutionMetadata(req);
+
+    // Fire non-blocking post-update hooks to core bundles
+    fireDeploymentChangedHooks(
+      {
+        deployment_id: id,
+        status: deployment.status,
+        environment: deployment.environment || existingEnvironment,
+        previous_status: previousStatus,
+      },
+      executionMetadata.trace_id
+    );
+
     res.status(200).json({
       updated: true,
       id,
-      execution_metadata: buildExecutionMetadata(req),
+      execution_metadata: executionMetadata,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

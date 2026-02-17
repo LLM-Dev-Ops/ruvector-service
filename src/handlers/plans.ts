@@ -9,6 +9,7 @@ import { RuvectorPlan } from '../types';
 import logger from '../utils/logger';
 import { getOrCreateCorrelationId } from '../utils/correlation';
 import { buildExecutionMetadata } from '../utils/executionMetadata';
+import { firePlanStoredHooks } from '../utils/hooks';
 
 // Validation schema for creating a plan
 export const createPlanSchema = z.object({
@@ -53,6 +54,12 @@ export async function createPlanHandler(
     logger.info({ correlationId, planId: id, orgId: org_id }, 'Plan stored successfully');
 
     const executionMetadata = buildExecutionMetadata(req);
+
+    // Fire non-blocking post-store hooks to core bundles
+    firePlanStoredHooks(
+      { plan_id: id, intent, org_id, checksum },
+      executionMetadata.trace_id
+    );
 
     res.status(201).json({
       accepted: true,
