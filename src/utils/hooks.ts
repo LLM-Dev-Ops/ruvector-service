@@ -64,6 +64,7 @@ const GOVERNANCE_CORE = 'https://governance-core-1062287243982.us-central1.run.a
 const INTELLIGENCE_CORE = 'https://intelligence-core-1062287243982.us-central1.run.app';
 const AUTOMATION_CORE = 'https://automation-core-1062287243982.us-central1.run.app';
 const SECURITY_CORE = 'https://security-core-1062287243982.us-central1.run.app';
+const ECOSYSTEM_CORE = 'https://ecosystem-core-1062287243982.us-central1.run.app';
 
 // ---------------------------------------------------------------------------
 // Plan hooks
@@ -74,6 +75,7 @@ interface PlanHookPayload {
   intent: string;
   org_id: string;
   checksum: string;
+  plan: Record<string, unknown>;
 }
 
 /**
@@ -97,6 +99,26 @@ export function firePlanStoredHooks(payload: PlanHookPayload, correlationId: str
           plan_id: payload.plan_id,
           intent: payload.intent,
           org_id: payload.org_id,
+        },
+      },
+      {
+        url: `${AUTOMATION_CORE}/v1/orchestration/event`,
+        body: {
+          source: 'ruvvector-service',
+          event_type: 'plan_stored',
+          execution_id: payload.plan_id,
+          timestamp,
+          payload: payload.plan,
+        },
+      },
+      {
+        url: `${ECOSYSTEM_CORE}/v1/ecosystem/event`,
+        body: {
+          source: 'ruvvector-service',
+          event_type: 'plan_stored',
+          execution_id: payload.plan_id,
+          timestamp,
+          payload: { plan_id: payload.plan_id, action: 'store' },
         },
       },
     ],

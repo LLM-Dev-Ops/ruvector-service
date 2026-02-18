@@ -57,7 +57,7 @@ export async function createPlanHandler(
 
     // Fire non-blocking post-store hooks to core bundles
     firePlanStoredHooks(
-      { plan_id: id, intent, org_id, checksum },
+      { plan_id: id, intent, org_id, checksum, plan },
       executionMetadata.trace_id
     );
 
