@@ -44,10 +44,35 @@ export class DatabaseClient {
   }
 
   /**
-   * Initialize the database and create tables if needed
+   * Initialize the database and create tables if needed.
+   * Retries the initial connection to handle Cloud SQL cold starts.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
+
+    // Retry initial DB connection — Cloud SQL may need time to wake up on cold start
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await this.pool.query('SELECT 1');
+        break; // connection established
+      } catch (err) {
+        if (attempt === maxRetries) {
+          logger.error(
+            { error: err, attempts: maxRetries },
+            'Database connection failed after retries'
+          );
+          throw err;
+        }
+        const delay = baseDelayMs * attempt;
+        logger.warn(
+          { attempt, maxRetries, delayMs: delay, error: (err as Error).message },
+          'Database connection attempt failed, retrying'
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
 
     try {
       // Create plans table if it doesn't exist

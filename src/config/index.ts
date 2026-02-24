@@ -137,18 +137,11 @@ export const config: Config = {
     timeout: getEnvNumber('SHUTDOWN_TIMEOUT', 30000),
   },
 
-  // Execution authority — HMAC secret is REQUIRED, no default
+  // Execution authority — HMAC secret is REQUIRED (validated at startup assertions phase)
+  // NOTE: Do NOT throw here — config is loaded at import time before main() try/catch.
+  // The startup assertions in assertions.ts validate this with proper logging.
   execution: {
-    hmacSecret: (() => {
-      const secret = process.env.EXECUTION_HMAC_SECRET;
-      if (!secret || secret.trim() === '') {
-        throw new Error(
-          'FATAL: EXECUTION_HMAC_SECRET environment variable is required. ' +
-          'DO NOT allow partial operation without execution authority signing key.'
-        );
-      }
-      return secret;
-    })(),
+    hmacSecret: getEnvVar('EXECUTION_HMAC_SECRET', ''),
     acceptanceTimeoutMs: getEnvNumber('EXECUTION_ACCEPTANCE_TIMEOUT_MS', 5000),
   },
 };

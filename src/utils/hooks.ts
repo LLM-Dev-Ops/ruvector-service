@@ -2,10 +2,58 @@
  * Post-execution hooks for fan-out to core bundles.
  * All calls are non-blocking (fire-and-forget via Promise.allSettled).
  * Forwards X-Correlation-ID from execution_metadata.trace_id.
+ *
+ * Authentication: Uses Google Cloud metadata server to obtain OIDC identity
+ * tokens for Cloud Run service-to-service auth.
  */
 import logger from './logger';
 
 const HOOK_TIMEOUT_MS = 5000;
+
+// Cache identity tokens per audience (they last ~1 hour; refresh at 55 min)
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
+
+/**
+ * Fetch a Google Cloud OIDC identity token for a given audience.
+ * Works on Cloud Run via the metadata server; returns null locally.
+ */
+async function getIdentityToken(audience: string): Promise<string | null> {
+  const cached = tokenCache.get(audience);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+
+  try {
+    const metadataUrl =
+      `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}`;
+    const res = await fetch(metadataUrl, {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(2000),
+    });
+
+    if (!res.ok) {
+      logger.warn({ audience, status: res.status }, 'Failed to fetch identity token from metadata server');
+      return null;
+    }
+
+    const token = await res.text();
+    // Identity tokens are valid for ~1 hour
+    tokenCache.set(audience, { token, expiresAt: Date.now() + 55 * 60 * 1000 - TOKEN_REFRESH_MARGIN_MS });
+    return token;
+  } catch {
+    // Not running on GCP or metadata server unavailable — skip auth
+    return null;
+  }
+}
+
+/**
+ * Extract the base URL (scheme + host) from a full URL for use as the OIDC audience.
+ */
+function getAudience(url: string): string {
+  const parsed = new URL(url);
+  return `${parsed.protocol}//${parsed.host}`;
+}
 
 interface HookTarget {
   url: string;
@@ -15,6 +63,7 @@ interface HookTarget {
 /**
  * Fire non-blocking POST calls to multiple targets.
  * Uses Promise.allSettled so failures in one target don't affect others.
+ * Includes OIDC identity token for Cloud Run IAM authentication.
  */
 function fireHooks(targets: HookTarget[], correlationId: string): void {
   Promise.allSettled(
@@ -23,12 +72,21 @@ function fireHooks(targets: HookTarget[], correlationId: string): void {
       const timeout = setTimeout(() => controller.abort(), HOOK_TIMEOUT_MS);
 
       try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': correlationId,
+        };
+
+        // Obtain OIDC identity token for the target service
+        const audience = getAudience(url);
+        const idToken = await getIdentityToken(audience);
+        if (idToken) {
+          headers['Authorization'] = `Bearer ${idToken}`;
+        }
+
         const res = await fetch(url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Correlation-ID': correlationId,
-          },
+          headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         });
