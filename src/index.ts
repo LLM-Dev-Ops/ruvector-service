@@ -54,7 +54,8 @@ import {
   listExecutionsHandler,
   validateExecutionHandler,
 } from './handlers/executions';
-import { acceptSimulationHandler, getSimulationHandler } from './handlers/simulations';
+import { acceptSimulationHandler, getSimulationHandler, listSimulationsHandler, updateSimulationHandler } from './handlers/simulations';
+import { storeVectorsHandler } from './handlers/vectors';
 import {
   createApprovalLearningHandler,
   createFeedbackAssimilationHandler,
@@ -287,6 +288,26 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   });
 
   // ============================================================================
+  // Vectors API - Agent vector embedding persistence layer
+  // Called by copilot-agents with RUVECTOR_NAMESPACE
+  // ============================================================================
+
+  // POST /v1/vectors/store - Store vector embeddings
+  app.post('/v1/vectors/store', (req, res, next) => {
+    storeVectorsHandler(req, res, dbClient, vectorClient).catch(next);
+  });
+
+  // ============================================================================
+  // Decision Events API - /v1/decision-events alias
+  // agentics-cli expects POST /v1/decision-events for emitting decision events
+  // ============================================================================
+
+  // POST /v1/decision-events - Alias for POST /events/decisions (CLI compatibility)
+  app.post('/v1/decision-events', (req, res, next) => {
+    ingestDecisionEventHandler(req, res, dbClient).catch(next);
+  });
+
+  // ============================================================================
   // Simulations API - Agentics-CLI Simulation Intent Authority
   // ruvvector-service is the ONLY authority for simulation execution_ids.
   // POST /v1/simulations accepts CLI simulation intents and mints execution authority.
@@ -297,9 +318,19 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
     acceptSimulationHandler(req, res, dbClient).catch(next);
   });
 
+  // GET /v1/simulations - List simulations (with optional org_id, caller_id, limit, offset)
+  app.get('/v1/simulations', (req, res, next) => {
+    listSimulationsHandler(req, res, dbClient).catch(next);
+  });
+
   // GET /v1/simulations/:id - Retrieve a stored simulation by execution ID
   app.get('/v1/simulations/:id', (req, res, next) => {
     getSimulationHandler(req, res, dbClient).catch(next);
+  });
+
+  // PUT /v1/simulations/:id - Update a simulation
+  app.put('/v1/simulations/:id', (req, res, next) => {
+    updateSimulationHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

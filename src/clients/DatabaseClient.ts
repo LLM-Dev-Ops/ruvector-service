@@ -422,6 +422,28 @@ export class DatabaseClient {
         ON decision_events_ingested(type)
       `);
 
+      // Create vectors table for agent vector embedding persistence
+      // POST /v1/vectors/store writes here
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS vectors (
+          id TEXT NOT NULL,
+          namespace VARCHAR(255) NOT NULL,
+          values JSONB NOT NULL,
+          metadata JSONB NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (namespace, id)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_vectors_namespace ON vectors(namespace)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_vectors_created_at ON vectors(created_at DESC)
+      `);
+
       this.initialized = true;
       logger.info('Database initialized successfully');
     } catch (error) {

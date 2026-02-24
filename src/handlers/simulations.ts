@@ -271,8 +271,223 @@ export async function getSimulationHandler(
   }
 }
 
+// ============================================================================
+// GET /v1/simulations — List simulations
+// ============================================================================
+
+export async function listSimulationsHandler(
+  req: Request,
+  res: Response,
+  dbClient: DatabaseClient
+): Promise<void> {
+  const correlationId = getOrCreateCorrelationId(req.headers);
+  res.setHeader('x-correlation-id', correlationId);
+
+  try {
+    const { limit = '50', offset = '0', org_id, caller_id } = req.query;
+
+    const parsedLimit = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 1000);
+    const parsedOffset = Math.max(parseInt(offset as string, 10) || 0, 0);
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
+
+    if (org_id && typeof org_id === 'string') {
+      conditions.push(`org_id = $${paramIndex}`);
+      params.push(org_id);
+      paramIndex++;
+    }
+
+    if (caller_id && typeof caller_id === 'string') {
+      conditions.push(`caller_id = $${paramIndex}`);
+      params.push(caller_id);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countResult = await dbClient.query<{ total: string }>(
+      `SELECT COUNT(*) as total FROM executions ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.total || '0', 10);
+
+    const selectQuery = `
+      SELECT execution_id, accepted, caller_id, org_id, simulation_type,
+             simulation_context, root_span_id, lineage, created_at
+      FROM executions ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+    params.push(parsedLimit, parsedOffset);
+
+    const result = await dbClient.query<{
+      execution_id: string;
+      accepted: boolean;
+      caller_id: string | null;
+      org_id: string | null;
+      simulation_type: string | null;
+      simulation_context: Record<string, unknown>;
+      root_span_id: string;
+      lineage: Record<string, unknown>;
+      created_at: string;
+    }>(selectQuery, params);
+
+    const simulations = result.rows.map((row) => ({
+      id: `ruvector-span-${row.root_span_id}`,
+      name: (row.lineage as Record<string, unknown>)?.intent_description ?? row.simulation_type ?? row.execution_id,
+      status: row.accepted ? 'completed' : 'rejected',
+      plan_id: row.root_span_id,
+      iterations: 1,
+      created_at: row.created_at,
+      completed_at: row.created_at,
+      results: {
+        caller_id: row.caller_id,
+        org_id: row.org_id,
+        simulation_type: row.simulation_type,
+        simulation_context: row.simulation_context,
+        lineage: row.lineage,
+      },
+    }));
+
+    logger.info(
+      { correlationId, count: simulations.length, total },
+      'Simulations listed successfully'
+    );
+
+    res.status(200).json({
+      simulations,
+      total,
+      limit: parsedLimit,
+      offset: parsedOffset,
+      execution_metadata: buildExecutionMetadata(req),
+    });
+  } catch (error) {
+    logger.error({ correlationId, error, repo_name: 'ruvvector-service' }, 'Failed to list simulations');
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Failed to list simulations',
+      correlationId,
+    });
+  }
+}
+
+// ============================================================================
+// PUT /v1/simulations/:id — Update simulation
+// ============================================================================
+
+export async function updateSimulationHandler(
+  req: Request,
+  res: Response,
+  dbClient: DatabaseClient
+): Promise<void> {
+  const correlationId = getOrCreateCorrelationId(req.headers);
+  res.setHeader('x-correlation-id', correlationId);
+
+  const { id } = req.params;
+
+  // Support both ruvector-span-{uuid} and exec-{uuid} formats
+  const SPAN_PREFIX = 'ruvector-span-';
+  const spanId = id.startsWith(SPAN_PREFIX) ? id.slice(SPAN_PREFIX.length) : null;
+
+  try {
+    const { simulation_context, simulation_type } = req.body || {};
+
+    // Build dynamic SET clause for partial update
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
+
+    if (simulation_context !== undefined) {
+      setClauses.push(`simulation_context = $${paramIndex}`);
+      params.push(JSON.stringify(simulation_context));
+      paramIndex++;
+    }
+
+    if (simulation_type !== undefined) {
+      setClauses.push(`simulation_type = $${paramIndex}`);
+      params.push(simulation_type);
+      paramIndex++;
+    }
+
+    if (setClauses.length === 0) {
+      res.status(400).json({
+        error: 'validation_error',
+        message: 'At least one updatable field is required (simulation_context, simulation_type)',
+        correlationId,
+      });
+      return;
+    }
+
+    const whereColumn = spanId ? 'root_span_id' : 'execution_id';
+    const whereValue = spanId ?? id;
+    params.push(whereValue);
+
+    const updateQuery = `
+      UPDATE executions SET ${setClauses.join(', ')}
+      WHERE ${whereColumn} = $${paramIndex}
+      RETURNING execution_id, accepted, caller_id, org_id, simulation_type,
+                simulation_context, root_span_id, lineage, created_at
+    `;
+
+    const result = await dbClient.query<{
+      execution_id: string;
+      accepted: boolean;
+      caller_id: string | null;
+      org_id: string | null;
+      simulation_type: string | null;
+      simulation_context: Record<string, unknown>;
+      root_span_id: string;
+      lineage: Record<string, unknown>;
+      created_at: string;
+    }>(updateQuery, params);
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Simulation not found', id });
+      return;
+    }
+
+    const row = result.rows[0];
+
+    logger.info(
+      { correlationId, executionId: row.execution_id, repo_name: 'ruvvector-service' },
+      'Simulation updated'
+    );
+
+    res.status(200).json({
+      simulation: {
+        id: `ruvector-span-${row.root_span_id}`,
+        name: (row.lineage as Record<string, unknown>)?.intent_description ?? row.simulation_type ?? row.execution_id,
+        status: row.accepted ? 'completed' : 'rejected',
+        plan_id: row.root_span_id,
+        iterations: 1,
+        created_at: row.created_at,
+        completed_at: row.created_at,
+        results: {
+          caller_id: row.caller_id,
+          org_id: row.org_id,
+          simulation_type: row.simulation_type,
+          simulation_context: row.simulation_context,
+          lineage: row.lineage,
+        },
+      },
+      execution_metadata: buildExecutionMetadata(req),
+    });
+  } catch (error) {
+    logger.error({ correlationId, error, id, repo_name: 'ruvvector-service' }, 'Failed to update simulation');
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Failed to update simulation',
+      correlationId,
+    });
+  }
+}
+
 export default {
   acceptSimulationHandler,
   getSimulationHandler,
+  listSimulationsHandler,
+  updateSimulationHandler,
   acceptanceRequestSchema,
 };
