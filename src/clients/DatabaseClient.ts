@@ -4,6 +4,15 @@
  */
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import logger from '../utils/logger';
+import {
+  VECTOR_TABLE,
+  SUPPORTED_VECTOR_TYPES,
+  VectorTypeName,
+  isSupportedVectorType,
+  assertValidDimension,
+  vectorTypeExpression,
+  cosineOperatorClass,
+} from './vectorSchema';
 
 export interface DatabaseConfig {
   host: string;
@@ -15,6 +24,8 @@ export interface DatabaseConfig {
   idleTimeoutMs: number;
   connectionTimeoutMs: number;
   ssl?: boolean;
+  /** Declared dimension of the `vectors.embedding` column. */
+  embeddingDimension: number;
 }
 
 /**
@@ -23,8 +34,10 @@ export interface DatabaseConfig {
 export class DatabaseClient {
   private pool: Pool;
   private initialized: boolean = false;
+  private embeddingDimension: number;
 
   constructor(config: DatabaseConfig) {
+    this.embeddingDimension = assertValidDimension(config.embeddingDimension);
     this.pool = new Pool({
       host: config.host,
       port: config.port,
@@ -444,12 +457,118 @@ export class DatabaseClient {
         CREATE INDEX IF NOT EXISTS idx_vectors_created_at ON vectors(created_at DESC)
       `);
 
+      await this.migrateVectorEmbeddingColumn();
+
       this.initialized = true;
       logger.info('Database initialized successfully');
     } catch (error) {
       logger.error({ error }, 'Failed to initialize database');
       throw error;
     }
+  }
+
+  /**
+   * Migration: `vectors.values JSONB` -> real `embedding <vector type>(N)` column
+   * with an HNSW cosine index (ADR-0001).
+   *
+   * Idempotent and safe to re-run, matching how every other schema change in
+   * this file is applied. `values` is deliberately retained and still written,
+   * so the change is reversible; it is dropped in a later change once the new
+   * column is proven.
+   */
+  private async migrateVectorEmbeddingColumn(): Promise<void> {
+    const vectorType = await this.ensureVectorExtension();
+    const columnType = vectorTypeExpression(vectorType, this.embeddingDimension);
+
+    await this.pool.query(
+      `ALTER TABLE ${VECTOR_TABLE} ADD COLUMN IF NOT EXISTS embedding ${columnType}`
+    );
+
+    // payload is part of the query contract but had nowhere to live while
+    // every read path returned an empty result set.
+    await this.pool.query(
+      `ALTER TABLE ${VECTOR_TABLE} ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'`
+    );
+
+    // Backfill rows written before the column existed. Rows whose archived
+    // JSONB array does not match the declared dimension cannot be represented
+    // and are left for operators to reconcile rather than silently dropped.
+    const backfilled = await this.pool.query(
+      `UPDATE ${VECTOR_TABLE}
+       SET embedding = replace("values"::text, ' ', '')::${columnType}
+       WHERE embedding IS NULL
+         AND jsonb_typeof("values") = 'array'
+         AND jsonb_array_length("values") = $1`,
+      [this.embeddingDimension]
+    );
+
+    const unconvertible = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM ${VECTOR_TABLE} WHERE embedding IS NULL`
+    );
+
+    await this.createEmbeddingIndex(vectorType);
+
+    logger.info(
+      {
+        vectorType,
+        dimension: this.embeddingDimension,
+        backfilled: backfilled.rowCount ?? 0,
+        unconvertible: Number(unconvertible.rows[0]?.count ?? 0),
+      },
+      'Vector embedding column migration applied'
+    );
+  }
+
+  /**
+   * Install whichever vector extension this server provides and return its type
+   * name. ruvnet/ruvector-postgres ships `ruvector`; Cloud SQL ships pgvector's
+   * `vector`. Neither implies the other.
+   */
+  private async ensureVectorExtension(): Promise<VectorTypeName> {
+    const failures: string[] = [];
+
+    for (const candidate of SUPPORTED_VECTOR_TYPES) {
+      try {
+        await this.pool.query(`CREATE EXTENSION IF NOT EXISTS ${candidate}`);
+      } catch (error) {
+        failures.push(`${candidate}: ${(error as Error).message}`);
+        continue;
+      }
+
+      const installed = await this.pool.query<{ typname: string }>(
+        `SELECT typname FROM pg_type WHERE typname = $1`,
+        [candidate]
+      );
+      if (installed.rows.length > 0 && isSupportedVectorType(installed.rows[0].typname)) {
+        return installed.rows[0].typname;
+      }
+    }
+
+    throw new Error(
+      `No vector extension available on this database. Tried ${SUPPORTED_VECTOR_TYPES.join(', ')}. ` +
+      `Errors: ${failures.join('; ')}`
+    );
+  }
+
+  /**
+   * Create the HNSW cosine index. The `hnsw` access method is an extension
+   * feature and may be absent; without it ANN search degrades to a sequential
+   * scan rather than failing, so a missing index is a warning, not a crash.
+   */
+  private async createEmbeddingIndex(vectorType: VectorTypeName): Promise<void> {
+    const hasHnsw = await this.pool.query(`SELECT 1 FROM pg_am WHERE amname = 'hnsw'`);
+    if (hasHnsw.rows.length === 0) {
+      logger.warn(
+        { vectorType },
+        'hnsw access method unavailable — embedding index skipped, similarity search will sequential scan'
+      );
+      return;
+    }
+
+    await this.pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_vectors_embedding_hnsw
+       ON ${VECTOR_TABLE} USING hnsw (embedding ${cosineOperatorClass(vectorType)})`
+    );
   }
 
   /**

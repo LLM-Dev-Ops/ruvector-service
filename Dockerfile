@@ -57,10 +57,13 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV LOG_LEVEL=info
 
-# Default RuvVector connection (optional for plans-only deployment)
-ENV RUVVECTOR_SERVICE_URL=http://localhost:6379
+# RuvVector behaviour. There is no separate vector endpoint — the vector store
+# is the Postgres database configured below.
+#
+# RUVVECTOR_EMBEDDING_DIM is deliberately NOT defaulted here: it fixes the
+# dimension of the vectors.embedding column and cannot be changed without
+# rewriting the table, so it must be supplied per deployment.
 ENV RUVVECTOR_TIMEOUT=30000
-ENV RUVVECTOR_POOL_SIZE=10
 
 # Database configuration (Cloud SQL PostgreSQL)
 # These should be overridden by Cloud Run environment variables

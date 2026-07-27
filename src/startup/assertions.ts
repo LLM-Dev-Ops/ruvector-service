@@ -5,6 +5,8 @@
  * CRASH ON FAILURE - do not proceed with missing config.
  */
 import logger from '../utils/logger';
+import { config, configDeprecations } from '../config';
+import { assertValidDimension } from '../clients/vectorSchema';
 
 /**
  * Required environment variables for production operation.
@@ -25,7 +27,6 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
 const OPTIONAL_ENV_VARS = [
   'PORT',
   'LOG_LEVEL',
-  'RUVVECTOR_SERVICE_URL',
   'RUVVECTOR_DB_PORT',
   'RUVVECTOR_DB_SSL',
   'RUVVECTOR_DB_MAX_CONNECTIONS',
@@ -163,6 +164,30 @@ export function assertExecutionAuthority(): void {
 }
 
 /**
+ * Assert the embedding dimension has been chosen.
+ *
+ * `vector(N)` fixes N in the table definition; changing it afterwards requires
+ * a rewrite. There is deliberately no default — an inferred dimension that
+ * disagrees with what producers send would corrupt every write.
+ */
+export function assertEmbeddingDimension(): number {
+  const dimension = config.ruvVector.embeddingDimension;
+
+  if (!dimension) {
+    throw new Error(
+      'FATAL: RUVVECTOR_EMBEDDING_DIM is required. ' +
+      'It fixes the dimension of the vectors.embedding column and cannot be changed ' +
+      'without rewriting the table, so it must match the platform embedding model exactly. ' +
+      'DO NOT allow partial operation without a declared embedding dimension.'
+    );
+  }
+
+  assertValidDimension(dimension);
+  logger.info({ dimension }, 'Embedding dimension asserted');
+  return dimension;
+}
+
+/**
  * Assert memory layer role rules are properly configured.
  * Validates that the service is configured as a deterministic memory layer.
  */
@@ -191,8 +216,13 @@ export function runStartupAssertions(): {
 } {
   logger.info('Running startup assertions...');
 
+  if (configDeprecations.length > 0) {
+    logger.warn({ deprecations: configDeprecations }, 'Deprecated environment variables in use');
+  }
+
   const envResult = assertRequiredEnvVars();
   const maxLatencyMs = assertPerformanceBudget();
+  assertEmbeddingDimension();
   assertExecutionAuthority();
   assertMemoryLayerRole();
 
@@ -204,6 +234,7 @@ export function runStartupAssertions(): {
 export default {
   assertRequiredEnvVars,
   assertPerformanceBudget,
+  assertEmbeddingDimension,
   assertExecutionAuthority,
   assertMemoryLayerRole,
   runStartupAssertions,

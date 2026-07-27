@@ -32,7 +32,7 @@ interface StoreVectorsRequest {
 export async function storeVectorsHandler(
   req: Request,
   res: Response,
-  dbClient: DatabaseClient,
+  _dbClient: DatabaseClient,
   vectorClient: VectorClient
 ): Promise<void> {
   const correlationId = getOrCreateCorrelationId(req.headers);
@@ -81,37 +81,12 @@ export async function storeVectorsHandler(
     }
 
     const storedIds: string[] = [];
-    const now = new Date().toISOString();
 
-    // Persist each vector to PostgreSQL (primary store)
+    // VectorClient writes the archived JSONB copy and the searchable embedding
+    // in one statement against this same database, so there is no second,
+    // best-effort write to swallow — a failure here is a persistence failure.
     for (const vec of body.vectors) {
-      await dbClient.query(
-        `INSERT INTO vectors (id, namespace, values, metadata, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
-         ON CONFLICT (namespace, id) DO UPDATE SET
-           values = EXCLUDED.values,
-           metadata = EXCLUDED.metadata,
-           updated_at = EXCLUDED.updated_at`,
-        [
-          vec.id,
-          body.namespace,
-          JSON.stringify(vec.values),
-          JSON.stringify(vec.metadata || {}),
-          now,
-        ]
-      );
-
-      // Best-effort upsert to VectorClient for similarity search
-      try {
-        await vectorClient.upsert(body.namespace, vec.id, vec.values, vec.metadata || {});
-      } catch (vectorErr) {
-        // VectorClient failures are non-fatal — DB is the source of truth
-        logger.warn(
-          { correlationId, vectorId: vec.id, error: vectorErr },
-          'VectorClient upsert failed (non-fatal)'
-        );
-      }
-
+      await vectorClient.upsert(body.namespace, vec.id, vec.values, vec.metadata || {});
       storedIds.push(vec.id);
     }
 

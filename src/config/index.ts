@@ -7,12 +7,12 @@ interface Config {
   port: number;
   logLevel: string;
 
-  // RuvVector connection (infra-provisioned)
+  // RuvVector vector-store behaviour.
+  // There is no service URL: the vector backend is the Postgres database
+  // configured below (ADR-0001).
   ruvVector: {
-    serviceUrl: string;   // REQUIRED: Full service URL (e.g., http://ruvvector:6379)
-    apiKey?: string;      // OPTIONAL: API key if authentication required
-    timeout: number;      // Request timeout (ms)
-    poolSize: number;     // Connection pool size
+    timeout: number;             // Request timeout (ms)
+    embeddingDimension: number;  // REQUIRED: declared dimension of vectors.embedding
   };
 
   // PostgreSQL Database configuration (for plans storage)
@@ -54,23 +54,52 @@ interface Config {
 }
 
 /**
- * Get optional environment variable with default
+ * Deprecation notices raised while reading configuration.
+ *
+ * Config is imported before the logger exists (the logger reads config), so
+ * notices are buffered here and emitted by the startup assertions.
  */
-const getEnvVar = (key: string, defaultValue: string): string => {
-  const value = process.env[key];
-  return value !== undefined && value !== '' ? value : defaultValue;
+export const configDeprecations: string[] = [];
+
+/**
+ * Read a `RUVVECTOR_*` variable, falling back to the one-v `RUVECTOR_*`
+ * spelling used by most consumer repos.
+ *
+ * The two-v form is what this service reads, so it is canonical; the one-v form
+ * is a deprecated alias that exists to give consumers a migration window rather
+ * than forcing an atomic cross-repo cutover (ADR-0001).
+ */
+const readEnv = (key: string): string | undefined => {
+  const canonical = process.env[key];
+  if (canonical !== undefined && canonical !== '') {
+    return canonical;
+  }
+
+  if (!key.startsWith('RUVVECTOR_')) {
+    return undefined;
+  }
+
+  const alias = `RUVECTOR_${key.slice('RUVVECTOR_'.length)}`;
+  const aliasValue = process.env[alias];
+  if (aliasValue !== undefined && aliasValue !== '') {
+    configDeprecations.push(
+      `${alias} is deprecated and will be removed; set ${key} instead`
+    );
+    return aliasValue;
+  }
+
+  return undefined;
 };
 
 /**
- * Get optional environment variable (may be undefined)
+ * Get optional environment variable with default
  */
-const getOptionalEnvVar = (key: string): string | undefined => {
-  const value = process.env[key];
-  return value !== undefined && value !== '' ? value : undefined;
+const getEnvVar = (key: string, defaultValue: string): string => {
+  return readEnv(key) ?? defaultValue;
 };
 
 const getEnvNumber = (key: string, defaultValue: number): number => {
-  const value = process.env[key];
+  const value = readEnv(key);
   if (value === undefined) {
     return defaultValue;
   }
@@ -82,7 +111,7 @@ const getEnvNumber = (key: string, defaultValue: number): number => {
 };
 
 const getEnvBoolean = (key: string, defaultValue: boolean): boolean => {
-  const value = process.env[key];
+  const value = readEnv(key);
   if (value === undefined) {
     return defaultValue;
   }
@@ -98,12 +127,13 @@ export const config: Config = {
   port: getEnvNumber('PORT', 3000),
   logLevel: getEnvVar('LOG_LEVEL', 'info'),
 
-  // RuvVector connection - RUVVECTOR_SERVICE_URL with default for local dev
+  // RuvVector vector-store behaviour.
+  // embeddingDimension has NO default: `vector(N)` fixes N at the schema level
+  // and changing it later means a table rewrite, so it must be chosen
+  // deliberately. 0 is a sentinel that startup assertions reject.
   ruvVector: {
-    serviceUrl: getEnvVar('RUVVECTOR_SERVICE_URL', 'http://localhost:6379'),
-    apiKey: getOptionalEnvVar('RUVVECTOR_API_KEY'),
     timeout: getEnvNumber('RUVVECTOR_TIMEOUT', 30000),
-    poolSize: getEnvNumber('RUVVECTOR_POOL_SIZE', 10),
+    embeddingDimension: getEnvNumber('RUVVECTOR_EMBEDDING_DIM', 0),
   },
 
   // PostgreSQL Database configuration — required for operation
