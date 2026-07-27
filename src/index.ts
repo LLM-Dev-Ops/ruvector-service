@@ -487,6 +487,7 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
     idleTimeoutMs: config.database.idleTimeoutMs,
     connectionTimeoutMs: config.database.connectionTimeoutMs,
     ssl: config.database.ssl,
+    embeddingDimension: config.ruvVector.embeddingDimension,
   });
 
   // Initialize database (create tables if needed)
@@ -513,12 +514,10 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
     );
   }
 
-  // Initialize VectorClient with SPARC-compliant config
-  const vectorClient = new VectorClient({
-    serviceUrl: config.ruvVector.serviceUrl,
-    apiKey: config.ruvVector.apiKey,
+  // VectorClient is a repository over the pool above — same database, one connection path
+  const vectorClient = new VectorClient(dbClient, {
     timeout: config.ruvVector.timeout,
-    poolSize: config.ruvVector.poolSize,
+    embeddingDimension: config.ruvVector.embeddingDimension,
     circuitBreaker: {
       threshold: config.circuitBreaker.threshold,
       timeout: config.circuitBreaker.timeout,
@@ -526,14 +525,14 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
     },
   });
 
-  // Establish connection to RuvVector
+  // Verify the vector schema is present and matches the configured dimension
   try {
     await vectorClient.connect();
   } catch (error) {
     logger.error({ error, repo_name: 'ruvvector-service' }, 'VectorClient connection failed');
     throw new Error(
-      'FATAL: VectorClient connection failed. ' +
-      'DO NOT allow partial operation without required service configuration.'
+      `FATAL: VectorClient connection failed: ${(error as Error).message}. ` +
+      'DO NOT allow partial operation without a usable vector schema.'
     );
   }
 
@@ -542,12 +541,11 @@ async function startServer(): Promise<{ server: Server; dbClient: DatabaseClient
 
   // Start HTTP server
   const server = app.listen(config.port, () => {
-    const connectionInfo = vectorClient.getConnectionInfo();
     const dbStats = dbClient.getPoolStats();
     logger.info(
       {
         port: config.port,
-        ruvvectorServiceUrl: connectionInfo.serviceUrl,
+        embeddingDimension: vectorClient.getEmbeddingDimension(),
         database: {
           host: config.database.host,
           name: config.database.name,

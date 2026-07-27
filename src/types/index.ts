@@ -197,6 +197,7 @@ export interface VectorInsertParams {
   vector: number[];
   payload: object;
   metadata: object;
+  namespace?: string;               // Defaults to DEFAULT_NAMESPACE
 }
 
 export interface VectorInsertResult {

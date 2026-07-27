@@ -6,6 +6,7 @@
 export {
   assertRequiredEnvVars,
   assertPerformanceBudget,
+  assertEmbeddingDimension,
   assertMemoryLayerRole,
   runStartupAssertions,
   type AssertionResult,

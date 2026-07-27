@@ -1,8 +1,22 @@
 import request from 'supertest';
 import { createApp } from '../../src/index';
 import { VectorClient } from '../../src/clients/VectorClient';
+import { DatabaseClient } from '../../src/clients/DatabaseClient';
 import { config } from '../../src/config';
 import { encodeEntitlementContext } from '../../src/utils/entitlement';
+
+/**
+ * Requires a live ruvnet/ruvector-postgres container — see
+ * tests/integration/vector-persistence.test.ts for the run command.
+ */
+const TEST_VECTOR = Array.from(
+  { length: config.ruvVector.embeddingDimension },
+  (_, i) => (i + 1) / 10
+);
+const OTHER_VECTOR = Array.from(
+  { length: config.ruvVector.embeddingDimension },
+  (_, i) => (i + 4) / 10
+);
 
 /**
  * API Integration Tests - SPARC Compliant
@@ -17,30 +31,52 @@ import { encodeEntitlementContext } from '../../src/utils/entitlement';
  */
 describe('API Integration Tests - SPARC Compliant', () => {
   let app: any;
+  let dbClient: DatabaseClient;
   let vectorClient: VectorClient;
   let validEntitlementContext: string;
 
-  beforeAll(() => {
-    // Initialize VectorClient with SPARC-compliant config
-    vectorClient = new VectorClient({
-      host: config.ruvVector.host,
-      port: config.ruvVector.port,
+  beforeAll(async () => {
+    dbClient = new DatabaseClient({
+      host: config.database.host,
+      port: config.database.port,
+      database: config.database.name,
+      user: config.database.user,
+      password: config.database.password,
+      maxConnections: 5,
+      idleTimeoutMs: 5000,
+      connectionTimeoutMs: 5000,
+      ssl: config.database.ssl,
+      embeddingDimension: config.ruvVector.embeddingDimension,
+    });
+    await dbClient.initialize();
+
+    vectorClient = new VectorClient(dbClient, {
       timeout: config.ruvVector.timeout,
-      poolSize: config.ruvVector.poolSize,
+      embeddingDimension: config.ruvVector.embeddingDimension,
       circuitBreaker: {
         threshold: config.circuitBreaker.threshold,
         timeout: config.circuitBreaker.timeout,
         resetTimeout: config.circuitBreaker.resetTimeout,
       },
     });
+    await vectorClient.connect();
 
-    app = createApp(vectorClient);
+    app = createApp(vectorClient, dbClient);
 
     // Create valid entitlement context (Base64-encoded JSON)
     validEntitlementContext = encodeEntitlementContext({
       tenant: 'test-tenant',
       scope: 'all'
     });
+  });
+
+  afterAll(async () => {
+    if (dbClient) {
+      await dbClient.query('DELETE FROM vectors WHERE id = $1', [
+        '550e8400-e29b-41d4-a716-446655440000',
+      ]);
+      await dbClient.close();
+    }
   });
 
   describe('GET /health (F7)', () => {
@@ -73,7 +109,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
           eventId: '550e8400-e29b-41d4-a716-446655440000',
           correlationId: '550e8400-e29b-41d4-a716-446655440001',
           timestamp: '2024-01-01T00:00:00Z',
-          vector: [0.1, 0.2, 0.3],
+          vector: TEST_VECTOR,
           payload: { test: 'data' },
           metadata: {
             source: 'test-source',
@@ -95,7 +131,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
           eventId: '550e8400-e29b-41d4-a716-446655440000',
           correlationId: '550e8400-e29b-41d4-a716-446655440001',
           timestamp: '2024-01-01T00:00:00Z',
-          vector: [0.1, 0.2, 0.3],
+          vector: TEST_VECTOR,
           payload: { test: 'data' },
           metadata: {
             source: 'test-source',
@@ -118,7 +154,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
           eventId: '550e8400-e29b-41d4-a716-446655440000',
           correlationId: '550e8400-e29b-41d4-a716-446655440001',
           timestamp: '2024-01-01T00:00:00Z',
-          vector: [0.1, 0.2, 0.3],
+          vector: TEST_VECTOR,
           payload: { test: 'data' },
           metadata: {
             source: 'test-source',
@@ -158,7 +194,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
           eventId: '550e8400-e29b-41d4-a716-446655440000',
           correlationId: correlationId,
           timestamp: '2024-01-01T00:00:00Z',
-          vector: [0.1, 0.2, 0.3],
+          vector: TEST_VECTOR,
           payload: { test: 'data' },
           metadata: {
             source: 'test-source',
@@ -184,7 +220,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
         .post('/query')
         .set('Content-Type', 'application/json')
         .send({
-          queryVector: [0.1, 0.2, 0.3],
+          queryVector: TEST_VECTOR,
           limit: 10,
         });
 
@@ -201,7 +237,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
         .set('x-correlation-id', correlationId)
         .set('x-entitlement-context', validEntitlementContext)
         .send({
-          queryVector: [0.1, 0.2, 0.3],
+          queryVector: TEST_VECTOR,
           limit: 10,
         });
 
@@ -244,7 +280,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
         .post('/simulate')
         .set('Content-Type', 'application/json')
         .send({
-          contextVectors: [[0.1, 0.2, 0.3]],
+          contextVectors: [TEST_VECTOR],
         });
 
       expect(response.status).toBe(400);
@@ -260,10 +296,7 @@ describe('API Integration Tests - SPARC Compliant', () => {
         .set('x-correlation-id', correlationId)
         .set('x-entitlement-context', validEntitlementContext)
         .send({
-          contextVectors: [
-            [0.1, 0.2, 0.3],
-            [0.4, 0.5, 0.6],
-          ],
+          contextVectors: [TEST_VECTOR, OTHER_VECTOR],
           nearestNeighbors: 5,
           similarityThreshold: 0.8,
         });
@@ -275,6 +308,21 @@ describe('API Integration Tests - SPARC Compliant', () => {
       expect(response.body.execution).toHaveProperty('executionTime');
       expect(response.body.execution).toHaveProperty('correlationId');
       expect(response.headers).toHaveProperty('x-correlation-id', correlationId);
+    });
+  });
+
+  describe('POST /predict', () => {
+    it('should return 501 rather than a fabricated prediction', async () => {
+      const response = await request(app)
+        .post('/predict')
+        .set('Content-Type', 'application/json')
+        .set('x-correlation-id', '550e8400-e29b-41d4-a716-446655440005')
+        .set('x-entitlement-context', validEntitlementContext)
+        .send({ model: 'any-model', input: TEST_VECTOR });
+
+      expect(response.status).toBe(501);
+      expect(response.body).toHaveProperty('error', 'not_implemented');
+      expect(response.body).not.toHaveProperty('confidence');
     });
   });
 

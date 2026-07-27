@@ -17,6 +17,11 @@ DB_NAME="ruvector-postgres"
 DB_USER="postgres"
 DB_PASSWORD="7yekrYmmMj74Te26!"
 
+# Dimension of the vectors.embedding column. No default: it is fixed at the
+# schema level and changing it requires a table rewrite, so the caller must
+# state it rather than inherit a guess.
+EMBEDDING_DIM="${RUVVECTOR_EMBEDDING_DIM:?Set RUVVECTOR_EMBEDDING_DIM to the platform embedding model's dimension before deploying}"
+
 echo "==> Deploying ${SERVICE_NAME} to Cloud Run"
 echo "    Project: ${PROJECT_ID}"
 echo "    Region: ${REGION}"
@@ -53,14 +58,14 @@ gcloud run deploy ${SERVICE_NAME} \
     --timeout 60 \
     --set-env-vars "PORT=8080" \
     --set-env-vars "LOG_LEVEL=info" \
-    --set-env-vars "RUVECTOR_SERVICE_URL=http://localhost:6379" \
-    --set-env-vars "RUVECTOR_DB_HOST=${DB_HOST}" \
-    --set-env-vars "RUVECTOR_DB_PORT=${DB_PORT}" \
-    --set-env-vars "RUVECTOR_DB_NAME=${DB_NAME}" \
-    --set-env-vars "RUVECTOR_DB_USER=${DB_USER}" \
-    --set-env-vars "RUVECTOR_DB_PASSWORD=${DB_PASSWORD}" \
-    --set-env-vars "RUVECTOR_DB_MAX_CONNECTIONS=20" \
-    --set-env-vars "RUVECTOR_DB_SSL=false"
+    --set-env-vars "RUVVECTOR_EMBEDDING_DIM=${EMBEDDING_DIM}" \
+    --set-env-vars "RUVVECTOR_DB_HOST=${DB_HOST}" \
+    --set-env-vars "RUVVECTOR_DB_PORT=${DB_PORT}" \
+    --set-env-vars "RUVVECTOR_DB_NAME=${DB_NAME}" \
+    --set-env-vars "RUVVECTOR_DB_USER=${DB_USER}" \
+    --set-env-vars "RUVVECTOR_DB_PASSWORD=${DB_PASSWORD}" \
+    --set-env-vars "RUVVECTOR_DB_MAX_CONNECTIONS=20" \
+    --set-env-vars "RUVVECTOR_DB_SSL=false"
 
 # Get service URL
 SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format='value(status.url)')

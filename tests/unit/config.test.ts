@@ -1,18 +1,10 @@
 /**
  * Configuration tests - SPARC Compliant
- *
- * NOTE: These tests require RUVVECTOR_SERVICE_URL to be set in the test environment.
- * The test setup (tests/setup.ts) should set this environment variable.
  */
 
 describe('Configuration - SPARC Compliant', () => {
   // Store original env
   const originalEnv = process.env;
-
-  beforeAll(() => {
-    // Ensure RUVVECTOR_SERVICE_URL is set for tests
-    process.env.RUVVECTOR_SERVICE_URL = process.env.RUVVECTOR_SERVICE_URL || 'http://test-ruvvector:6379';
-  });
 
   afterAll(() => {
     process.env = originalEnv;
@@ -31,19 +23,21 @@ describe('Configuration - SPARC Compliant', () => {
     expect(config.logLevel).toBeDefined();
   });
 
-  it('should have RuvVector configuration with serviceUrl (SPARC env vars)', () => {
+  it('should have RuvVector configuration without a separate service endpoint', () => {
     const config = getConfig();
     expect(config.ruvVector).toBeDefined();
-    expect(config.ruvVector.serviceUrl).toBeDefined();
-    expect(typeof config.ruvVector.serviceUrl).toBe('string');
     expect(config.ruvVector.timeout).toBeGreaterThan(0);
-    expect(config.ruvVector.poolSize).toBeGreaterThan(0);
+    // The vector backend is the database below — there is no second endpoint
+    expect(config.ruvVector).not.toHaveProperty('serviceUrl');
+    expect(config.ruvVector).not.toHaveProperty('apiKey');
+    expect(config.ruvVector).not.toHaveProperty('poolSize');
   });
 
-  it('should allow optional apiKey', () => {
+  it('should read the embedding dimension from the environment', () => {
     const config = getConfig();
-    // apiKey is optional, so it may be undefined
-    expect(config.ruvVector.apiKey === undefined || typeof config.ruvVector.apiKey === 'string').toBe(true);
+    expect(config.ruvVector.embeddingDimension).toBe(
+      Number(process.env.RUVVECTOR_EMBEDDING_DIM)
+    );
   });
 
   it('should have circuit breaker configuration', () => {
@@ -68,18 +62,55 @@ describe('Configuration - SPARC Compliant', () => {
   });
 
   describe('Default value behavior', () => {
-    it('should use default RUVVECTOR_SERVICE_URL when not provided', () => {
-      const originalUrl = process.env.RUVVECTOR_SERVICE_URL;
-      delete process.env.RUVVECTOR_SERVICE_URL;
+    it('should not default the embedding dimension', () => {
+      const original = process.env.RUVVECTOR_EMBEDDING_DIM;
+      delete process.env.RUVVECTOR_EMBEDDING_DIM;
 
       jest.resetModules();
       const { config: testConfig } = require('../../src/config');
 
-      // Should use default value instead of throwing
-      expect(testConfig.ruvVector.serviceUrl).toBe('http://localhost:6379');
+      // 0 is the sentinel that startup assertions reject — guessing N would
+      // corrupt every write, so there is deliberately no usable default.
+      expect(testConfig.ruvVector.embeddingDimension).toBe(0);
 
-      // Restore
-      process.env.RUVVECTOR_SERVICE_URL = originalUrl;
+      process.env.RUVVECTOR_EMBEDDING_DIM = original;
+    });
+  });
+
+  describe('Deprecated one-v RUVECTOR_* aliases', () => {
+    const restore: Record<string, string | undefined> = {};
+
+    afterEach(() => {
+      for (const [key, value] of Object.entries(restore)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('falls back to the one-v spelling and records a deprecation', () => {
+      restore.RUVVECTOR_DB_HOST = process.env.RUVVECTOR_DB_HOST;
+      restore.RUVECTOR_DB_HOST = process.env.RUVECTOR_DB_HOST;
+      delete process.env.RUVVECTOR_DB_HOST;
+      process.env.RUVECTOR_DB_HOST = 'legacy-host';
+
+      jest.resetModules();
+      const { config: testConfig, configDeprecations } = require('../../src/config');
+
+      expect(testConfig.database.host).toBe('legacy-host');
+      expect(configDeprecations.join('\n')).toContain('RUVECTOR_DB_HOST is deprecated');
+    });
+
+    it('prefers the canonical two-v spelling when both are set', () => {
+      restore.RUVVECTOR_DB_HOST = process.env.RUVVECTOR_DB_HOST;
+      restore.RUVECTOR_DB_HOST = process.env.RUVECTOR_DB_HOST;
+      process.env.RUVVECTOR_DB_HOST = 'canonical-host';
+      process.env.RUVECTOR_DB_HOST = 'legacy-host';
+
+      jest.resetModules();
+      const { config: testConfig, configDeprecations } = require('../../src/config');
+
+      expect(testConfig.database.host).toBe('canonical-host');
+      expect(configDeprecations.join('\n')).not.toContain('RUVECTOR_DB_HOST');
     });
   });
 });
