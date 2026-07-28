@@ -2,6 +2,26 @@ import pino from 'pino';
 import { config } from '../config';
 
 /**
+ * Pino applies serializers by property name. `Error.prototype.message`/`.stack`/`.name`
+ * are non-enumerable, so any Error logged under a key without a registered serializer
+ * renders as `{}`. This codebase logs caught values under `error` (62 call sites) and
+ * `reason` (unhandled rejections), so both must be registered alongside `err`.
+ * pino 9's `errorKey` option would cover this; this service is on pino 8.
+ */
+export const loggerSerializers = {
+  req: (req: { method: string; url: string }) => ({
+    method: req.method,
+    url: req.url,
+  }),
+  res: (res: { statusCode: number }) => ({
+    statusCode: res.statusCode,
+  }),
+  err: pino.stdSerializers.err,
+  error: pino.stdSerializers.err,
+  reason: pino.stdSerializers.err,
+};
+
+/**
  * Structured logger - SPARC compliant
  *
  * All logs are JSON-formatted with consistent fields per SPARC specification:
@@ -23,16 +43,7 @@ export const logger = pino({
     },
   },
   timestamp: pino.stdTimeFunctions.isoTime,
-  serializers: {
-    req: (req) => ({
-      method: req.method,
-      url: req.url,
-    }),
-    res: (res) => ({
-      statusCode: res.statusCode,
-    }),
-    err: pino.stdSerializers.err,
-  },
+  serializers: loggerSerializers,
 });
 
 export default logger;

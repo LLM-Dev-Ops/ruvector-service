@@ -18,6 +18,9 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'RUVVECTOR_DB_USER',
   'RUVVECTOR_DB_PASSWORD',
   'EXECUTION_HMAC_SECRET',
+  // Has no default and hard-crashes assertEmbeddingDimension() when unset; listing it
+  // here is what makes the reported "missing" count reflect what can actually crash startup.
+  'RUVVECTOR_EMBEDDING_DIM',
 ] as const;
 
 /**
