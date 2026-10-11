@@ -241,50 +241,50 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   });
 
   // ============================================================================
-  // Lineage API - /v1/lineage endpoints (in-memory storage)
+  // Lineage API - append-only records in the existing RuVector Cloud SQL store
   // ============================================================================
 
   // POST /v1/lineage - Store a lineage record
   app.post('/v1/lineage', (req, res, next) => {
-    createLineageHandler(req, res).catch(next);
+    createLineageHandler(req, res, dbClient).catch(next);
   });
 
   // GET /v1/lineage/simulation/:simulationId/artifacts - Get lineage records for a simulation
   app.get('/v1/lineage/simulation/:simulationId/artifacts', (req, res, next) => {
-    getLineageBySimulationHandler(req, res).catch(next);
+    getLineageBySimulationHandler(req, res, dbClient).catch(next);
   });
 
   // GET /v1/lineage/artifact/:artifactId - Get lineage for a specific artifact
   app.get('/v1/lineage/artifact/:artifactId', (req, res, next) => {
-    getLineageByArtifactHandler(req, res).catch(next);
+    getLineageByArtifactHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================
-  // ERP Mappings API - /v1/erp-mappings endpoints (in-memory storage)
+  // ERP Mappings API - append-only records in the existing RuVector Cloud SQL store
   // ============================================================================
 
   // POST /v1/erp-mappings - Store ERP surface mapping
   app.post('/v1/erp-mappings', (req, res, next) => {
-    createErpMappingHandler(req, res).catch(next);
+    createErpMappingHandler(req, res, dbClient).catch(next);
   });
 
   // GET /v1/erp-mappings - List ERP mappings (with optional simulation_id filter)
   app.get('/v1/erp-mappings', (req, res, next) => {
-    listErpMappingsHandler(req, res).catch(next);
+    listErpMappingsHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================
-  // Integration Proposals API - /v1/integration-proposals endpoints (in-memory storage)
+  // Integration Proposals API - append-only records in the existing RuVector Cloud SQL store
   // ============================================================================
 
   // POST /v1/integration-proposals - Store integration proposal
   app.post('/v1/integration-proposals', (req, res, next) => {
-    createIntegrationProposalHandler(req, res).catch(next);
+    createIntegrationProposalHandler(req, res, dbClient).catch(next);
   });
 
   // GET /v1/integration-proposals - List proposals (with optional simulation_id filter)
   app.get('/v1/integration-proposals', (req, res, next) => {
-    listIntegrationProposalsHandler(req, res).catch(next);
+    listIntegrationProposalsHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================
@@ -639,7 +639,7 @@ async function main(): Promise<void> {
 
 // Start the application
 if (require.main === module) {
-  main();
+  void main();
 }
 
 export { createApp, startServer };

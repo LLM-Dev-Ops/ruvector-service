@@ -45,7 +45,10 @@ export function normalizePayload(body: Record<string, unknown>): Record<string, 
 
   const intentValue = body.intent ?? body.scenario ?? body.description;
   if (intentValue !== undefined) {
-    const { intent, scenario, description, ...rest } = body as Record<string, unknown>;
+    const rest = { ...body };
+    delete rest.intent;
+    delete rest.scenario;
+    delete rest.description;
     return { ...rest, intent_description: intentValue };
   }
 
@@ -93,7 +96,7 @@ export async function acceptSimulationHandler(
     const rootSpan: AuthoritySpan = {
       span_id: rootSpanId,
       type: 'authority',
-      origin: 'ruvvector-service',
+      origin: 'ruvector-service',
       parent: null,
       created_at: now,
     };
@@ -157,7 +160,7 @@ export async function acceptSimulationHandler(
     const response: AcceptanceResponse = {
       execution_id: executionId,
       parent_span_id: rootSpanId,
-      authority: 'ruvvector-service',
+      authority: 'ruvector-service',
       accepted: true,
       timestamp: now,
     };
@@ -309,7 +312,7 @@ export async function listSimulationsHandler(
 
     const countResult = await dbClient.query<{ total: string }>(
       `SELECT COUNT(*) as total FROM executions ${whereClause}`,
-      params
+      [...params]
     );
     const total = parseInt(countResult.rows[0]?.total || '0', 10);
 

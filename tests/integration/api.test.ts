@@ -17,6 +17,11 @@ const OTHER_VECTOR = Array.from(
   { length: config.ruvVector.embeddingDimension },
   (_, i) => (i + 4) / 10
 );
+const ARTIFACT_SUFFIX = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const LINEAGE_ID = `lineage-${ARTIFACT_SUFFIX}`;
+const PROPOSAL_ID = `proposal-${ARTIFACT_SUFFIX}`;
+const ERP_MAPPING_ID = `erp-${ARTIFACT_SUFFIX}`;
+const SIMULATION_ID = `simulation-${ARTIFACT_SUFFIX}`;
 
 /**
  * API Integration Tests - SPARC Compliant
@@ -75,6 +80,9 @@ describe('API Integration Tests - SPARC Compliant', () => {
       await dbClient.query('DELETE FROM vectors WHERE id = $1', [
         '550e8400-e29b-41d4-a716-446655440000',
       ]);
+      await dbClient.query('DELETE FROM erp_mappings WHERE id = $1', [ERP_MAPPING_ID]);
+      await dbClient.query('DELETE FROM integration_proposals WHERE id = $1', [PROPOSAL_ID]);
+      await dbClient.query('DELETE FROM lineage_records WHERE id = $1', [LINEAGE_ID]);
       await dbClient.close();
     }
   });
@@ -333,6 +341,83 @@ describe('API Integration Tests - SPARC Compliant', () => {
       expect(response.status).toBe(200);
       expect(response.headers['content-type']).toContain('text/plain');
       expect(response.text).toContain('ruvvector_');
+    });
+  });
+
+  describe('append-only artifact persistence', () => {
+    it('survives application recreation through the shared RuVector database', async () => {
+      const createdAt = '2026-10-11T18:00:00.000Z';
+
+      const lineage = await request(app).post('/v1/lineage').send({
+        id: LINEAGE_ID,
+        artifact_id: `artifact-${ARTIFACT_SUFFIX}`,
+        artifact_category: 'simulation',
+        simulation_id: SIMULATION_ID,
+        decision_context: { verdict: 'accepted' },
+        attribution: { created_by: 'integration-test', org_id: 'org-test' },
+        governance: { gate_pipeline_version: '1', synthesis_classification: 'bounded' },
+        created_at: createdAt,
+      });
+      expect(lineage.status).toBe(201);
+
+      const proposal = await request(app).post('/v1/integration-proposals').send({
+        id: PROPOSAL_ID,
+        type: 'integration_proposal',
+        integration_name: 'erp-test',
+        proposed_changes: { endpoint: '/bounded' },
+        risks: [],
+        dependencies: [],
+        simulation_id: SIMULATION_ID,
+        attribution: { created_by: 'integration-test' },
+        created_at: createdAt,
+      });
+      expect(proposal.status).toBe(201);
+
+      const mapping = await request(app).post('/v1/erp-mappings').send({
+        id: ERP_MAPPING_ID,
+        type: 'erp_mapping',
+        erp_type: 'sap',
+        entity_type: 'invoice',
+        proposed_implementation: { connector: 'bounded' },
+        simulation_id: SIMULATION_ID,
+        integration_proposal_ids: [PROPOSAL_ID],
+        attribution: { created_by: 'integration-test' },
+        created_at: createdAt,
+      });
+      expect(mapping.status).toBe(201);
+
+      // Recreate the Express application to prove reads do not depend on
+      // process-local Maps or the app instance that accepted the writes.
+      const freshApp = createApp(vectorClient, dbClient);
+      const [lineageRead, proposalRead, mappingRead] = await Promise.all([
+        request(freshApp).get(`/v1/lineage/simulation/${SIMULATION_ID}/artifacts`),
+        request(freshApp).get('/v1/integration-proposals').query({ simulation_id: SIMULATION_ID }),
+        request(freshApp).get('/v1/erp-mappings').query({ simulation_id: SIMULATION_ID }),
+      ]);
+
+      expect(lineageRead.status).toBe(200);
+      expect(lineageRead.body.artifacts).toEqual([
+        expect.objectContaining({ id: LINEAGE_ID, created_at: createdAt }),
+      ]);
+      expect(proposalRead.body.proposals).toEqual([
+        expect.objectContaining({ id: PROPOSAL_ID, simulation_id: SIMULATION_ID }),
+      ]);
+      expect(mappingRead.body.mappings).toEqual([
+        expect.objectContaining({ id: ERP_MAPPING_ID, simulation_id: SIMULATION_ID }),
+      ]);
+
+      const duplicate = await request(freshApp).post('/v1/lineage').send({
+        id: LINEAGE_ID,
+        artifact_id: 'mutated-artifact',
+        artifact_category: 'simulation',
+        simulation_id: SIMULATION_ID,
+        decision_context: {},
+        attribution: { created_by: 'integration-test', org_id: 'org-test' },
+        governance: { gate_pipeline_version: '2', synthesis_classification: 'mutated' },
+        created_at: createdAt,
+      });
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body).toHaveProperty('error', 'immutable_conflict');
     });
   });
 

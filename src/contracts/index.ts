@@ -30,7 +30,7 @@ export type ExecutionRootSpan = z.infer<typeof ExecutionRootSpanSchema>;
 export const AuthoritySpanSchema = z.object({
   span_id: z.string().uuid(),
   type: z.literal('authority'),
-  origin: z.literal('ruvvector-service'),
+  origin: z.literal('ruvector-service'),
   parent: z.null(),
   created_at: z.string().datetime({ offset: true }),
 });
@@ -42,7 +42,7 @@ export type AuthoritySpan = z.infer<typeof AuthoritySpanSchema>;
 // ============================================================================
 
 export const ExecutionLineageMetadataSchema = z.object({
-  origin_service: z.literal('ruvvector-service'),
+  origin_service: z.literal('ruvector-service'),
   origin_version: z.string().min(1),
   acceptance_timestamp: z.string().datetime({ offset: true }),
   root_span: ExecutionRootSpanSchema,
@@ -171,7 +171,7 @@ export type AcceptanceRequest = z.infer<typeof AcceptanceRequestSchema>;
 export const AcceptanceResponseSchema = z.object({
   execution_id: z.string().regex(/^exec-[0-9a-f-]{36}$/),
   parent_span_id: z.string().uuid(),
-  authority: z.literal('ruvvector-service'),
+  authority: z.literal('ruvector-service'),
   accepted: z.literal(true),
   timestamp: z.string().datetime({ offset: true }),
 });

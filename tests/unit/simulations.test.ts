@@ -1,5 +1,10 @@
 import { Request, Response } from 'express';
-import { acceptSimulationHandler } from '../../src/handlers/simulations';
+import {
+  acceptSimulationHandler,
+  getSimulationHandler,
+  listSimulationsHandler,
+  updateSimulationHandler,
+} from '../../src/handlers/simulations';
 
 // Mock config
 jest.mock('../../src/config', () => ({
@@ -31,6 +36,7 @@ jest.mock('../../src/utils/logger', () => ({
 function mockReq(overrides: Partial<Request> = {}): Partial<Request> {
   return {
     headers: {},
+    header: jest.fn().mockReturnValue(undefined),
     params: {},
     query: {},
     body: {},
@@ -333,7 +339,7 @@ describe('POST /v1/simulations — Execution Authority Minting Gate', () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'validation_error' })
+        expect.objectContaining({ error: 'contract_violation' })
       );
     });
 
@@ -422,5 +428,163 @@ describe('POST /v1/simulations — Execution Authority Minting Gate', () => {
       await acceptSimulationHandler(req2 as Request, res2 as Response, db2);
       expect(simulationAcceptanceDuration.observe).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('simulation persistence handlers', () => {
+  const storedRow = {
+    execution_id: 'exec-11111111-1111-4111-8111-111111111111',
+    accepted: true,
+    caller_id: 'agentics-cli',
+    org_id: 'org-1',
+    simulation_type: 'deployment',
+    simulation_context: { region: 'ca' },
+    root_span_id: '22222222-2222-4222-8222-222222222222',
+    lineage: { intent_description: 'Deploy service' },
+    created_at: '2026-10-11T18:00:00.000Z',
+  };
+
+  it('retrieves by canonical execution id', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [storedRow], rowCount: 1 });
+    const res = mockRes();
+    await getSimulationHandler(
+      mockReq({ params: { id: storedRow.execution_id } }) as Request,
+      res,
+      mockDbClient(query)
+    );
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('execution_id = $1'), [storedRow.execution_id]);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('retrieves by derived span id and maps rejected status', async () => {
+    const row = { ...storedRow, accepted: false, lineage: {}, simulation_type: null };
+    const query = jest.fn().mockResolvedValue({ rows: [row], rowCount: 1 });
+    const res = mockRes();
+    await getSimulationHandler(
+      mockReq({ params: { id: `ruvector-span-${storedRow.root_span_id}` } }) as Request,
+      res,
+      mockDbClient(query)
+    );
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('root_span_id = $1'), [storedRow.root_span_id]);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        simulation: expect.objectContaining({ status: 'rejected', name: storedRow.execution_id }),
+      })
+    );
+  });
+
+  it('returns 404 for a missing simulation', async () => {
+    const res = mockRes();
+    await getSimulationHandler(
+      mockReq({ params: { id: storedRow.execution_id } }) as Request,
+      res,
+      mockDbClient()
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('fails closed when retrieval storage fails', async () => {
+    const res = mockRes();
+    const db = mockDbClient(jest.fn().mockRejectedValue(new Error('unavailable')));
+    await getSimulationHandler(
+      mockReq({ params: { id: storedRow.execution_id } }) as Request,
+      res,
+      db
+    );
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('lists simulations with both bound filters and bounded pagination', async () => {
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rows: [{ total: '1' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [storedRow], rowCount: 1 });
+    const res = mockRes();
+    await listSimulationsHandler(
+      mockReq({
+        query: { org_id: 'org-1', caller_id: 'agentics-cli', limit: '5000', offset: '-10' },
+      }) as Request,
+      res,
+      mockDbClient(query)
+    );
+    expect(query.mock.calls[0][1]).toEqual(['org-1', 'agentics-cli']);
+    expect(query.mock.calls[1][1]).toEqual(['org-1', 'agentics-cli', 1000, 0]);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ total: 1, limit: 1000, offset: 0 })
+    );
+  });
+
+  it('lists without filters and uses default pagination', async () => {
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rows: [{ total: '0' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const res = mockRes();
+    await listSimulationsHandler(mockReq() as Request, res, mockDbClient(query));
+    expect(query.mock.calls[0][1]).toEqual([]);
+    expect(query.mock.calls[1][1]).toEqual([50, 0]);
+  });
+
+  it('returns 500 when listing fails', async () => {
+    const res = mockRes();
+    await listSimulationsHandler(
+      mockReq() as Request,
+      res,
+      mockDbClient(jest.fn().mockRejectedValue(new Error('unavailable')))
+    );
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('rejects an update with no mutable fields', async () => {
+    const res = mockRes();
+    await updateSimulationHandler(
+      mockReq({ params: { id: storedRow.execution_id }, body: {} }) as Request,
+      res,
+      mockDbClient()
+    );
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('updates both fields through a parameterized execution-id query', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [storedRow], rowCount: 1 });
+    const res = mockRes();
+    await updateSimulationHandler(
+      mockReq({
+        params: { id: storedRow.execution_id },
+        body: { simulation_context: { region: 'us' }, simulation_type: 'replay' },
+      }) as Request,
+      res,
+      mockDbClient(query)
+    );
+    expect(query.mock.calls[0][0]).toContain('WHERE execution_id = $3');
+    expect(query.mock.calls[0][1]).toEqual([
+      JSON.stringify({ region: 'us' }),
+      'replay',
+      storedRow.execution_id,
+    ]);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('updates a span id and returns 404 when it no longer exists', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const res = mockRes();
+    await updateSimulationHandler(
+      mockReq({
+        params: { id: `ruvector-span-${storedRow.root_span_id}` },
+        body: { simulation_type: 'replay' },
+      }) as Request,
+      res,
+      mockDbClient(query)
+    );
+    expect(query.mock.calls[0][0]).toContain('WHERE root_span_id = $2');
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('returns 500 when updating fails', async () => {
+    const res = mockRes();
+    await updateSimulationHandler(
+      mockReq({ params: { id: storedRow.execution_id }, body: { simulation_type: 'replay' } }) as Request,
+      res,
+      mockDbClient(jest.fn().mockRejectedValue(new Error('unavailable')))
+    );
+    expect(res.status).toHaveBeenCalledWith(500);
   });
 });

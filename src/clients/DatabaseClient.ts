@@ -435,6 +435,72 @@ export class DatabaseClient {
         ON decision_events_ingested(type)
       `);
 
+      // Append-only audit and synthesis artifacts. These tables replace
+      // process-local Maps so Cloud Run instances remain stateless and share
+      // the existing RuVector-backed Cloud SQL persistence layer.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS lineage_records (
+          id TEXT PRIMARY KEY,
+          artifact_id TEXT NOT NULL,
+          artifact_category TEXT NOT NULL,
+          simulation_id TEXT NOT NULL,
+          plan_id TEXT,
+          decision_context JSONB NOT NULL,
+          attribution JSONB NOT NULL,
+          governance JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_lineage_records_simulation
+        ON lineage_records(simulation_id, created_at ASC, id ASC)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_lineage_records_artifact
+        ON lineage_records(artifact_id, created_at DESC, id DESC)
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS integration_proposals (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL CHECK (type = 'integration_proposal'),
+          integration_name TEXT NOT NULL,
+          proposed_changes JSONB NOT NULL,
+          risks JSONB NOT NULL,
+          dependencies JSONB NOT NULL,
+          simulation_id TEXT NOT NULL,
+          plan_id TEXT,
+          attribution JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_integration_proposals_simulation
+        ON integration_proposals(simulation_id, created_at ASC, id ASC)
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS erp_mappings (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL CHECK (type = 'erp_mapping'),
+          erp_type TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          proposed_implementation JSONB NOT NULL,
+          simulation_id TEXT NOT NULL,
+          integration_proposal_ids JSONB NOT NULL,
+          attribution JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_erp_mappings_simulation
+        ON erp_mappings(simulation_id, created_at ASC, id ASC)
+      `);
+
       // Create vectors table for agent vector embedding persistence
       // POST /v1/vectors/store writes here
       await this.pool.query(`

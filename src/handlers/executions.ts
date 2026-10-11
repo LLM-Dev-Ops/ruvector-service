@@ -146,7 +146,7 @@ export async function acceptExecutionHandler(
 
     // Build lineage metadata
     const lineage: ExecutionLineageMetadata = {
-      origin_service: 'ruvvector-service',
+      origin_service: 'ruvector-service',
       origin_version: '1.0.0',
       acceptance_timestamp: now,
       root_span: rootSpan,
