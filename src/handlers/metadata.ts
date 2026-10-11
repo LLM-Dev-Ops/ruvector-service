@@ -36,7 +36,7 @@ export async function metadataHandler(
 
   // TODO: Enhance with dynamic capability detection
   const response: MetadataResponse = {
-    service: 'ruvvector-service',
+    service: 'ruvector-service',
     version: '1.0.0',
     endpoints: [
       'POST /ingest',

@@ -4,6 +4,8 @@ import { getOrCreateCorrelationId } from '../utils/correlation';
 import { checkEntitlement, EntitlementResult } from '../utils/entitlement';
 
 // Extend Express Request type to include our custom properties
+// TypeScript's Express declaration merging requires this namespace form.
+/* eslint-disable @typescript-eslint/no-namespace */
 declare global {
   namespace Express {
     interface Request {
@@ -12,6 +14,7 @@ declare global {
     }
   }
 }
+/* eslint-enable @typescript-eslint/no-namespace */
 
 /**
  * Middleware factory for validating request bodies against Zod schemas

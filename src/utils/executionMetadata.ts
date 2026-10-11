@@ -20,6 +20,6 @@ export function buildExecutionMetadata(req: Request): ExecutionMetadata {
   return {
     trace_id: traceId,
     timestamp: new Date().toISOString(),
-    service: 'ruvvector-service',
+    service: 'ruvector-service',
   };
 }

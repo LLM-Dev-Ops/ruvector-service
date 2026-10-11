@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-ISC-blue?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/coverage-99%25-brightgreen?style=flat-square" alt="Coverage" />
+  <img src="https://img.shields.io/badge/coverage-70%25_minimum-brightgreen?style=flat-square" alt="Coverage gate: 70% minimum" />
   <img src="https://img.shields.io/badge/status-production-success?style=flat-square" alt="Status" />
 </p>
 

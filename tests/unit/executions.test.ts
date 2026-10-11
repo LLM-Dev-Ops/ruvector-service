@@ -85,7 +85,7 @@ describe('Execution Handlers', () => {
           reason: null,
           authority_signature: expect.stringMatching(/^[0-9a-f]{64}$/),
           lineage: expect.objectContaining({
-            origin_service: 'ruvvector-service',
+            origin_service: 'ruvector-service',
             root_span: expect.objectContaining({
               type: 'execution_root',
               parent_span_id: null,
@@ -106,7 +106,7 @@ describe('Execution Handlers', () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'validation_error' })
+        expect.objectContaining({ error: 'contract_violation' })
       );
     });
 
@@ -153,7 +153,7 @@ describe('Execution Handlers', () => {
         reason: null,
         authority_signature: 'abc123',
         lineage: {
-          origin_service: 'ruvvector-service',
+          origin_service: 'ruvector-service',
           origin_version: '1.0.0',
           acceptance_timestamp: '2024-01-01T00:00:00Z',
           root_span: {
@@ -394,7 +394,7 @@ describe('Execution Handlers', () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'validation_error' })
+        expect.objectContaining({ error: 'contract_violation' })
       );
     });
   });
