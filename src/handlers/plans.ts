@@ -38,18 +38,32 @@ export async function createPlanHandler(
 
     const { id, intent, plan, org_id, user_id, checksum } = validatedData;
 
-    // Insert plan into database
-    await dbClient.query(
+    // Keep ownership immutable with one atomic upsert (no read-then-write race).
+    const result = await dbClient.query<{ id: string }>(
       `INSERT INTO plans (id, type, intent, plan, org_id, user_id, checksum, created_at)
        VALUES ($1, 'plan', $2, $3, $4, $5, $6, NOW())
        ON CONFLICT (id) DO UPDATE SET
          intent = EXCLUDED.intent,
          plan = EXCLUDED.plan,
-         org_id = EXCLUDED.org_id,
-         user_id = EXCLUDED.user_id,
-         checksum = EXCLUDED.checksum`,
+         checksum = EXCLUDED.checksum
+       WHERE plans.org_id = EXCLUDED.org_id
+         AND plans.user_id = EXCLUDED.user_id
+       RETURNING id`,
       [id, intent, JSON.stringify(plan), org_id, user_id, checksum]
     );
+
+    if (result.rowCount === 0) {
+      logger.warn(
+        { correlationId, planId: id, orgId: org_id },
+        'Plan ownership conflict'
+      );
+      res.status(409).json({
+        error: 'ownership_conflict',
+        message: 'Plan ID is already owned by another principal',
+        correlationId,
+      });
+      return;
+    }
 
     logger.info({ correlationId, planId: id, orgId: org_id }, 'Plan stored successfully');
 
