@@ -437,6 +437,41 @@ export class DatabaseClient {
         ON data_plane_simulation_events (organization_id, simulation_id, id)
       `);
 
+      // Tenant-bound result index. The canonical result packet is preserved
+      // losslessly in JSONB while selected identifiers provide stable lookup.
+      // One serializable transaction stores each packet atomically.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_results (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          run_id VARCHAR(255) NOT NULL,
+          execution_id VARCHAR(255) NOT NULL,
+          simulation_id VARCHAR(255) NOT NULL,
+          scenario_id VARCHAR(255) NOT NULL,
+          environment VARCHAR(255) NOT NULL,
+          status VARCHAR(255) NOT NULL,
+          completed_at TIMESTAMPTZ NOT NULL,
+          stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          result JSONB NOT NULL,
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          CONSTRAINT data_plane_results_run_unique
+            UNIQUE (organization_id, run_id),
+          CONSTRAINT data_plane_results_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_results_replay
+        ON data_plane_results (organization_id, id)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_results_lookup
+        ON data_plane_results (organization_id, execution_id, simulation_id)
+      `);
+
       // Create decision_events_ingested table for externally published decision events
       // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
       await this.pool.query(`

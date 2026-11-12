@@ -73,6 +73,11 @@ import {
   replaySimulationEventsHandler,
 } from './handlers/simulationEvents';
 import { requireDataPlaneTenant } from './middleware/tenantIdentity';
+import {
+  getResultIndexHandler,
+  listResultIndexHandler,
+  storeResultIndexHandler,
+} from './handlers/resultIndex';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -351,6 +356,18 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
       replaySimulationEventsHandler(req, res, dbClient).catch(next);
     }
   );
+
+  app.post('/v1/data-plane/results', requireDataPlaneTenant, (req, res, next) => {
+    storeResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results', requireDataPlaneTenant, (req, res, next) => {
+    listResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results/:result_id', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexHandler(req, res, dbClient).catch(next);
+  });
 
   // ============================================================================
   // Decision Approval API - Learning endpoint for executive synthesis
