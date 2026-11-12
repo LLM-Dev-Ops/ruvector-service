@@ -6,6 +6,11 @@ import { AppError } from './errorHandler';
 declare module 'express-serve-static-core' {
   interface Request {
     dataPlanePrincipal: DataPlanePrincipal;
+    identityProviderCaller: {
+      subject: string;
+      principal: string;
+      audience: string;
+    };
   }
 }
 
@@ -13,6 +18,11 @@ interface CloudRunClaims {
   aud?: string | string[];
   email?: string;
   sub?: string;
+}
+
+interface VerifiedIamClaims {
+  email: string;
+  sub: string;
 }
 
 function bearerToken(req: Request): string {
@@ -36,6 +46,32 @@ function decodeClaims(token: string): CloudRunClaims {
   }
 }
 
+function requireIamClaims(req: Request): VerifiedIamClaims {
+  const claims = decodeClaims(bearerToken(req));
+  const audience = config.dataPlaneIdentity.serviceAudience;
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (!audience || !audiences.includes(audience)) {
+    throw new AppError(401, 'invalid_audience', 'Cloud Run IAM identity token audience does not match this service');
+  }
+  if (!claims.email || !claims.sub) {
+    throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token lacks principal claims');
+  }
+  return { email: claims.email.toLowerCase(), sub: claims.sub };
+}
+
+function identityCallerPrincipals(): Set<string> {
+  let value: unknown;
+  try {
+    value = JSON.parse(config.dataPlaneIdentity.identityCallerPrincipals);
+  } catch {
+    throw new AppError(503, 'identity_configuration_error', 'Identity caller principals are not valid JSON');
+  }
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string')) {
+    throw new AppError(503, 'identity_configuration_error', 'Identity caller principals are not configured');
+  }
+  return new Set(value.map((principal) => principal.toLowerCase()));
+}
+
 function principalBindings(): Record<string, string> {
   let value: unknown;
   try {
@@ -53,28 +89,37 @@ function principalBindings(): Record<string, string> {
 
 export function requireDataPlaneTenant(req: Request, _res: Response, next: NextFunction): void {
   try {
-    const claims = decodeClaims(bearerToken(req));
+    const claims = requireIamClaims(req);
     const audience = config.dataPlaneIdentity.serviceAudience;
-    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!audience || !audiences.includes(audience)) {
-      throw new AppError(401, 'invalid_audience', 'Cloud Run IAM identity token audience does not match this service');
-    }
-    if (!claims.email || !claims.sub) {
-      throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token lacks principal claims');
-    }
-
-    const organization = principalBindings()[claims.email.toLowerCase()];
+    const organization = principalBindings()[claims.email];
     if (!organization) {
       throw new AppError(403, 'principal_not_mapped', 'Authenticated principal has no organization binding');
     }
 
     req.dataPlanePrincipal = DataPlanePrincipalSchema.parse({
       subject: claims.sub,
-      principal: claims.email.toLowerCase(),
+      principal: claims.email,
       organization_id: organization,
       audience,
       mapping_source: 'configured_principal_binding',
     });
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+export function requireIdentityProviderCaller(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    const claims = requireIamClaims(req);
+    if (!identityCallerPrincipals().has(claims.email)) {
+      throw new AppError(403, 'identity_caller_not_allowed', 'Authenticated principal is not authorized for identity lookup');
+    }
+    req.identityProviderCaller = {
+      subject: claims.sub,
+      principal: claims.email,
+      audience: config.dataPlaneIdentity.serviceAudience,
+    };
     next();
   } catch (error) {
     next(error);

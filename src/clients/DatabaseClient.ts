@@ -535,6 +535,49 @@ export class DatabaseClient {
         ON data_plane_usage_reservations (organization_id, status, expires_at)
       `);
 
+      // Identity bootstrap is authorized by an IAM service-principal allowlist.
+      // The key hash, never a raw API key or caller-supplied organization id,
+      // resolves tenant ownership and its entitlement limits.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_identity_organizations (
+          organization_id VARCHAR(255) PRIMARY KEY,
+          plan VARCHAR(32) NOT NULL CHECK (plan IN ('free', 'developer', 'team', 'enterprise')),
+          max_requests BIGINT NOT NULL CHECK (max_requests >= 0),
+          max_tokens BIGINT NOT NULL CHECK (max_tokens >= 0),
+          max_api_keys INTEGER NOT NULL CHECK (max_api_keys >= 0),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_api_keys (
+          key_id UUID PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL REFERENCES data_plane_identity_organizations(organization_id),
+          name VARCHAR(255) NOT NULL,
+          scopes JSONB NOT NULL DEFAULT '[]',
+          key_hash CHAR(64) NOT NULL UNIQUE CHECK (key_hash ~ '^[a-f0-9]{64}$'),
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ,
+          revoked_at TIMESTAMPTZ,
+          last_used_at TIMESTAMPTZ
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_api_keys_organization
+        ON data_plane_api_keys (organization_id, key_id)
+      `);
+
+      await this.pool.query(`
+        CREATE OR REPLACE VIEW data_plane_identity_lookup AS
+        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at,
+               o.organization_id, o.plan, o.max_requests, o.max_tokens, o.max_api_keys
+          FROM data_plane_api_keys k
+          JOIN data_plane_identity_organizations o USING (organization_id)
+      `);
+
       // Create decision_events_ingested table for externally published decision events
       // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
       await this.pool.query(`

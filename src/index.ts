@@ -72,7 +72,7 @@ import {
   appendSimulationEventsHandler,
   replaySimulationEventsHandler,
 } from './handlers/simulationEvents';
-import { requireDataPlaneTenant } from './middleware/tenantIdentity';
+import { requireDataPlaneTenant, requireIdentityProviderCaller } from './middleware/tenantIdentity';
 import {
   getResultIndexScenarioHandler,
   getResultIndexSummaryHandler,
@@ -87,6 +87,10 @@ import {
   createUsageReservationHandler,
   getUsageBalanceHandler,
 } from './handlers/usageLedger';
+import {
+  lookupApiKeyHandler,
+  lookupEntitlementHandler,
+} from './handlers/identityProvider';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -404,6 +408,17 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
 
   app.post('/v1/data-plane/usage/reservations/:reservation_id/cancel', requireDataPlaneTenant, (req, res, next) => {
     cancelUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  // Identity bootstrap uses a separately allowlisted Cloud Run caller because
+  // the API-key hash is what discovers the application tenant. Neither route
+  // accepts organization scope from the caller.
+  app.post('/v1/data-plane/identity/api-keys/lookup', requireIdentityProviderCaller, (req, res, next) => {
+    lookupApiKeyHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/identity/entitlements/lookup', requireIdentityProviderCaller, (req, res, next) => {
+    lookupEntitlementHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

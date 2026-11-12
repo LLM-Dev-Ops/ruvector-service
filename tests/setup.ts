@@ -29,6 +29,9 @@ process.env.RUVVECTOR_SERVICE_AUDIENCE = 'https://ruvector.test';
 process.env.RUVVECTOR_PRINCIPAL_ORG_BINDINGS = JSON.stringify({
   'platform@test.example': 'org-test',
 });
+process.env.RUVVECTOR_IDENTITY_CALLER_PRINCIPALS = JSON.stringify([
+  'platform@test.example',
+]);
 
 // Increase timeout for integration tests
 jest.setTimeout(30000);

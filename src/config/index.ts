@@ -55,6 +55,7 @@ interface Config {
   dataPlaneIdentity: {
     serviceAudience: string;
     principalOrgBindings: string;
+    identityCallerPrincipals: string;
   };
 }
 
@@ -183,6 +184,7 @@ export const config: Config = {
   dataPlaneIdentity: {
     serviceAudience: getEnvVar('RUVVECTOR_SERVICE_AUDIENCE', ''),
     principalOrgBindings: getEnvVar('RUVVECTOR_PRINCIPAL_ORG_BINDINGS', '{}'),
+    identityCallerPrincipals: getEnvVar('RUVVECTOR_IDENTITY_CALLER_PRINCIPALS', '[]'),
   },
 };
 

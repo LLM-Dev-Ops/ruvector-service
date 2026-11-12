@@ -130,6 +130,17 @@
 | `POST` | `/learning/assimilate` | Feedback assimilation agent (latency-budgeted) |
 | `GET` | `/learning/inspect` | Inspect learning events (read-only) |
 
+### Tenant-bound Identity Provider
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/data-plane/identity/api-keys/lookup` | Resolve an active API-key hash to its tenant-bound key record |
+| `POST` | `/v1/data-plane/identity/entitlements/lookup` | Resolve entitlement limits from the same active API-key hash |
+
+These internal routes require an audience-bound Cloud Run identity whose
+principal is explicitly listed in `RUVVECTOR_IDENTITY_CALLER_PRINCIPALS`.
+They accept only a SHA-256 key hash—never a raw key or caller-supplied tenant.
+
 ### Legacy Vector Operations
 
 | Method | Endpoint | Description |
@@ -198,6 +209,9 @@ All configuration is via environment variables. No `.env` files in production.
 | `RUVVECTOR_DB_NAME` | `ruvector-postgres` | Database name |
 | `RUVVECTOR_DB_USER` | `postgres` | Database user |
 | `RUVVECTOR_DB_PASSWORD` | — | Database password |
+| `RUVVECTOR_SERVICE_AUDIENCE` | — | Required Cloud Run identity-token audience |
+| `RUVVECTOR_PRINCIPAL_ORG_BINDINGS` | — | JSON principal-to-tenant bindings for tenant-scoped routes |
+| `RUVVECTOR_IDENTITY_CALLER_PRINCIPALS` | — | JSON array of IAM principals allowed to perform identity bootstrap |
 | `RUVVECTOR_DB_MAX_CONNECTIONS` | `20` | Connection pool size |
 | `RUVVECTOR_DB_IDLE_TIMEOUT` | `30000` | Idle timeout (ms) |
 | `RUVVECTOR_DB_CONNECTION_TIMEOUT` | `10000` | Connection timeout (ms) |

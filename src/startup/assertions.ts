@@ -20,6 +20,7 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'EXECUTION_HMAC_SECRET',
   'RUVVECTOR_SERVICE_AUDIENCE',
   'RUVVECTOR_PRINCIPAL_ORG_BINDINGS',
+  'RUVVECTOR_IDENTITY_CALLER_PRINCIPALS',
   // Has no default and hard-crashes assertEmbeddingDimension() when unset; listing it
   // here is what makes the reported "missing" count reflect what can actually crash startup.
   'RUVVECTOR_EMBEDDING_DIM',
@@ -60,6 +61,20 @@ export function assertDataPlaneIdentity(): void {
 
   if (!bindings || Array.isArray(bindings) || typeof bindings !== 'object' || Object.keys(bindings).length === 0) {
     throw new Error('FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS must contain at least one principal mapping.');
+  }
+
+  let identityCallers: unknown;
+  try {
+    identityCallers = JSON.parse(config.dataPlaneIdentity.identityCallerPrincipals);
+  } catch {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS must be valid JSON.');
+  }
+  if (
+    !Array.isArray(identityCallers) ||
+    identityCallers.length === 0 ||
+    identityCallers.some((principal) => typeof principal !== 'string' || !principal.includes('@'))
+  ) {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS must contain at least one service principal.');
   }
 }
 

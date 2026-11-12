@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { AppError } from '../../src/middleware/errorHandler';
-import { requireDataPlaneTenant } from '../../src/middleware/tenantIdentity';
+import { requireDataPlaneTenant, requireIdentityProviderCaller } from '../../src/middleware/tenantIdentity';
 
 function token(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -57,6 +57,38 @@ describe('tenant-bound data-plane identity', () => {
     expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
       statusCode: 401,
       code: 'unauthenticated',
+    });
+  });
+
+  it('allows an explicitly configured IAM principal to perform identity bootstrap', () => {
+    const req = request({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireIdentityProviderCaller(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.identityProviderCaller).toEqual({
+      subject: 'iam-subject-1',
+      principal: 'platform@test.example',
+      audience: 'https://ruvector.test',
+    });
+  });
+
+  it('rejects an IAM principal that is not allowlisted for identity bootstrap', () => {
+    const next = jest.fn() as NextFunction;
+    requireIdentityProviderCaller(request({
+      aud: 'https://ruvector.test',
+      email: 'unknown@test.example',
+      sub: 'iam-subject-2',
+    }), {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 403,
+      code: 'identity_caller_not_allowed',
     });
   });
 });
