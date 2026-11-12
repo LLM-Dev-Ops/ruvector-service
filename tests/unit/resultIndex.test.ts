@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import {
+  getResultIndexScenarioHandler,
+  getResultIndexSummaryHandler,
   getResultIndexHandler,
   listResultIndexHandler,
   storeResultIndexHandler,
@@ -237,6 +239,69 @@ describe('tenant-bound result index provider', () => {
       statusCode: 400,
       code: 'validation_error',
       message: expect.stringContaining(field),
+    });
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('returns tenant-scoped scenario history from canonical result packets', async () => {
+    const req = request();
+    req.params = { scenario_id: 'scenario-1' };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{
+      total_runs: '4', successful_runs: '3', failed_runs: '1',
+      last_run_at: '2026-11-12T01:00:00.000Z', avg_duration_ms: '1250.5',
+    }] }) };
+    const res = response();
+
+    await getResultIndexScenarioHandler(req, res, db as any);
+
+    expect(db.query.mock.calls[0][0]).toContain('organization_id = $1 AND scenario_id = $2');
+    expect(db.query.mock.calls[0][1]).toEqual(['org-test', 'scenario-1']);
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id: 'org-test',
+      scenario: {
+        scenario_id: 'scenario-1', total_runs: 4, successful_runs: 3, failed_runs: 1,
+        last_run_at: '2026-11-12T01:00:00.000Z', avg_duration_ms: 1250.5,
+      },
+    });
+  });
+
+  it('does not expose a scenario absent from the authenticated tenant', async () => {
+    const req = request();
+    req.params = { scenario_id: 'missing' };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ total_runs: '0' }] }) };
+    await expect(getResultIndexScenarioHandler(req, response(), db as any)).rejects.toMatchObject({
+      statusCode: 404, code: 'scenario_not_found',
+    });
+  });
+
+  it('returns a tenant and environment bounded summary for an accepted period', async () => {
+    const req = request();
+    req.query = { environment: 'staging', period: '7d' };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{
+      total_runs: '5', successful_runs: '4', failed_runs: '1',
+      last_run_at: '2026-11-12T01:00:00.000Z', avg_duration_ms: '900',
+    }] }) };
+    const res = response();
+
+    await getResultIndexSummaryHandler(req, res, db as any);
+
+    expect(db.query.mock.calls[0][0]).toContain('organization_id = $1 AND environment = $2');
+    expect(db.query.mock.calls[0][1].slice(0, 2)).toEqual(['org-test', 'staging']);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-test',
+      summary: expect.objectContaining({ environment: 'staging', total_runs: 5, successful: 4, failed: 1, success_rate: 0.8 }),
+    }));
+  });
+
+  it.each([
+    [{ environment: '', period: '24h' }, 'environment'],
+    [{ environment: 'staging', period: '1h' }, 'period'],
+  ])('rejects invalid summary scope %#', async (query, field) => {
+    const req = request();
+    req.query = query;
+    const db = { query: jest.fn() };
+    await expect(getResultIndexSummaryHandler(req, response(), db as any)).rejects.toMatchObject({
+      statusCode: 400, message: expect.stringContaining(field),
     });
     expect(db.query).not.toHaveBeenCalled();
   });

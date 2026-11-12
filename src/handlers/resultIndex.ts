@@ -3,7 +3,9 @@ import { Request, Response } from 'express';
 import {
   ResultIndexListResponseSchema,
   ResultIndexResponseSchema,
+  ResultIndexScenarioResponseSchema,
   ResultIndexStoreRequestSchema,
+  ResultIndexSummaryResponseSchema,
   type ResultIndexDocument,
   type ResultIndexEntry,
   type ResultIndexStoreRequest,
@@ -16,6 +18,25 @@ interface StoredResult {
   stored_at: Date | string;
   result: ResultIndexDocument;
   request_hash: string;
+}
+
+interface ResultAggregate {
+  total_runs: string | number;
+  successful_runs: string | number;
+  failed_runs: string | number;
+  last_run_at: Date | string | null;
+  avg_duration_ms: string | number | null;
+}
+
+function aggregateNumber(value: string | number | null): number | null {
+  if (value === null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function aggregateDate(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return (value instanceof Date ? value : new Date(value)).toISOString();
 }
 
 function entry(row: StoredResult): ResultIndexEntry {
@@ -200,5 +221,98 @@ export async function listResultIndexHandler(
     organization_id: organizationId,
     results,
     next_after_id: results.at(-1)?.id ?? null,
+  }));
+}
+
+export async function getResultIndexScenarioHandler(
+  req: Request,
+  res: Response,
+  db: DatabaseClient
+): Promise<void> {
+  const scenarioId = String(req.params.scenario_id ?? '');
+  if (!scenarioId || scenarioId.length > 255) {
+    throw new AppError(400, 'validation_error', 'scenario_id is required and must be at most 255 characters');
+  }
+
+  const organizationId = req.dataPlanePrincipal.organization_id;
+  const result = await db.query<ResultAggregate>(
+    `SELECT COUNT(*)::text AS total_runs,
+            COUNT(*) FILTER (WHERE status = 'completed')::text AS successful_runs,
+            COUNT(*) FILTER (WHERE status <> 'completed')::text AS failed_runs,
+            MAX(completed_at) AS last_run_at,
+            AVG((result->'execution_metadata'->>'duration_ms')::double precision) AS avg_duration_ms
+       FROM data_plane_results
+      WHERE organization_id = $1 AND scenario_id = $2`,
+    [organizationId, scenarioId]
+  );
+  const aggregate = result.rows[0];
+  const totalRuns = Number(aggregate?.total_runs ?? 0);
+  if (totalRuns === 0) {
+    throw new AppError(404, 'scenario_not_found', 'Scenario is not indexed for this organization');
+  }
+
+  res.status(200).json(ResultIndexScenarioResponseSchema.parse({
+    organization_id: organizationId,
+    scenario: {
+      scenario_id: scenarioId,
+      total_runs: totalRuns,
+      successful_runs: Number(aggregate.successful_runs),
+      failed_runs: Number(aggregate.failed_runs),
+      last_run_at: aggregateDate(aggregate.last_run_at),
+      avg_duration_ms: aggregateNumber(aggregate.avg_duration_ms),
+    },
+  }));
+}
+
+const PERIOD_MILLISECONDS = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+} as const;
+
+export async function getResultIndexSummaryHandler(
+  req: Request,
+  res: Response,
+  db: DatabaseClient
+): Promise<void> {
+  const environment = typeof req.query.environment === 'string' ? req.query.environment : '';
+  const period = typeof req.query.period === 'string' ? req.query.period : '24h';
+  if (!environment || environment.length > 255) {
+    throw new AppError(400, 'validation_error', 'environment is required and must be at most 255 characters');
+  }
+  if (!(period in PERIOD_MILLISECONDS)) {
+    throw new AppError(400, 'validation_error', 'period must be one of 24h, 7d, or 30d');
+  }
+
+  const organizationId = req.dataPlanePrincipal.organization_id;
+  const until = new Date();
+  const since = new Date(until.getTime() - PERIOD_MILLISECONDS[period as keyof typeof PERIOD_MILLISECONDS]);
+  const result = await db.query<ResultAggregate>(
+    `SELECT COUNT(*)::text AS total_runs,
+            COUNT(*) FILTER (WHERE status = 'completed')::text AS successful_runs,
+            COUNT(*) FILTER (WHERE status <> 'completed')::text AS failed_runs,
+            MAX(completed_at) AS last_run_at,
+            AVG((result->'execution_metadata'->>'duration_ms')::double precision) AS avg_duration_ms
+       FROM data_plane_results
+      WHERE organization_id = $1 AND environment = $2
+        AND completed_at >= $3 AND completed_at <= $4`,
+    [organizationId, environment, since.toISOString(), until.toISOString()]
+  );
+  const aggregate = result.rows[0];
+  const totalRuns = Number(aggregate?.total_runs ?? 0);
+  const successful = Number(aggregate?.successful_runs ?? 0);
+
+  res.status(200).json(ResultIndexSummaryResponseSchema.parse({
+    organization_id: organizationId,
+    summary: {
+      environment,
+      period: { name: period, since: since.toISOString(), until: until.toISOString() },
+      total_runs: totalRuns,
+      successful,
+      failed: Number(aggregate?.failed_runs ?? 0),
+      success_rate: totalRuns === 0 ? 0 : successful / totalRuns,
+      avg_duration_ms: aggregateNumber(aggregate?.avg_duration_ms ?? null),
+      last_run_at: aggregateDate(aggregate?.last_run_at ?? null),
+    },
   }));
 }

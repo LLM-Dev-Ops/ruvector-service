@@ -74,10 +74,19 @@ import {
 } from './handlers/simulationEvents';
 import { requireDataPlaneTenant } from './middleware/tenantIdentity';
 import {
+  getResultIndexScenarioHandler,
+  getResultIndexSummaryHandler,
   getResultIndexHandler,
   listResultIndexHandler,
   storeResultIndexHandler,
 } from './handlers/resultIndex';
+import {
+  appendUsageEntryHandler,
+  cancelUsageReservationHandler,
+  consumeUsageReservationHandler,
+  createUsageReservationHandler,
+  getUsageBalanceHandler,
+} from './handlers/usageLedger';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -365,8 +374,36 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
     listResultIndexHandler(req, res, dbClient).catch(next);
   });
 
+  app.get('/v1/data-plane/results/summary', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexSummaryHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results/scenarios/:scenario_id', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexScenarioHandler(req, res, dbClient).catch(next);
+  });
+
   app.get('/v1/data-plane/results/:result_id', requireDataPlaneTenant, (req, res, next) => {
     getResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/entries', requireDataPlaneTenant, (req, res, next) => {
+    appendUsageEntryHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/usage/balance', requireDataPlaneTenant, (req, res, next) => {
+    getUsageBalanceHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations', requireDataPlaneTenant, (req, res, next) => {
+    createUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations/:reservation_id/consume', requireDataPlaneTenant, (req, res, next) => {
+    consumeUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations/:reservation_id/cancel', requireDataPlaneTenant, (req, res, next) => {
+    cancelUsageReservationHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

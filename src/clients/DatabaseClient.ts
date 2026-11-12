@@ -472,6 +472,69 @@ export class DatabaseClient {
         ON data_plane_results (organization_id, execution_id, simulation_id)
       `);
 
+      // Tenant-bound usage ledger. Entries are append-only; balances are
+      // materialized on each entry for auditable replay while reservations
+      // transition atomically under the same per-tenant serializable lock.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_usage_entries (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          entry_type VARCHAR(32) NOT NULL CHECK (entry_type IN ('grant', 'debit', 'reservation_consume')),
+          amount NUMERIC(20,6) NOT NULL,
+          balance_after NUMERIC(20,6) NOT NULL,
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          correlation_id VARCHAR(255) NOT NULL,
+          user_id VARCHAR(255),
+          service VARCHAR(255),
+          run_id VARCHAR(255),
+          metadata JSONB NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_usage_entries_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_usage_entries_replay
+        ON data_plane_usage_entries (organization_id, id)
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_usage_reservations (
+          id UUID PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          amount NUMERIC(20,6) NOT NULL CHECK (amount > 0),
+          status VARCHAR(32) NOT NULL CHECK (status IN ('active', 'consumed', 'cancelled', 'expired')),
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          correlation_id VARCHAR(255) NOT NULL,
+          user_id VARCHAR(255),
+          service VARCHAR(255),
+          run_id VARCHAR(255),
+          metadata JSONB NOT NULL DEFAULT '{}',
+          expires_at TIMESTAMPTZ NOT NULL,
+          final_action VARCHAR(16) CHECK (final_action IN ('consume', 'cancel')),
+          final_idempotency_key VARCHAR(255),
+          final_request_hash CHAR(64),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_usage_reservations_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_data_plane_usage_reservations_final_idempotency
+        ON data_plane_usage_reservations (organization_id, final_idempotency_key)
+        WHERE final_idempotency_key IS NOT NULL
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_usage_reservations_active
+        ON data_plane_usage_reservations (organization_id, status, expires_at)
+      `);
+
       // Create decision_events_ingested table for externally published decision events
       // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
       await this.pool.query(`
