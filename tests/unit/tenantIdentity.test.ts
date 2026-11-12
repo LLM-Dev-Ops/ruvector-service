@@ -1,0 +1,62 @@
+import { NextFunction, Request, Response } from 'express';
+import { AppError } from '../../src/middleware/errorHandler';
+import { requireDataPlaneTenant } from '../../src/middleware/tenantIdentity';
+
+function token(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+  const claims = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${header}.${claims}.unsigned`;
+}
+
+function request(payload: Record<string, unknown>): Request {
+  return {
+    headers: { authorization: `Bearer ${token(payload)}` },
+  } as unknown as Request;
+}
+
+describe('tenant-bound data-plane identity', () => {
+  it('derives organization scope from the configured IAM principal binding', () => {
+    const req = request({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.dataPlanePrincipal).toEqual({
+      subject: 'iam-subject-1',
+      principal: 'platform@test.example',
+      organization_id: 'org-test',
+      audience: 'https://ruvector.test',
+      mapping_source: 'configured_principal_binding',
+    });
+  });
+
+  it.each([
+    ['wrong audience', { aud: 'https://other.test', email: 'platform@test.example', sub: 'iam-subject-1' }, 401, 'invalid_audience'],
+    ['unmapped principal', { aud: 'https://ruvector.test', email: 'unknown@test.example', sub: 'iam-subject-2' }, 403, 'principal_not_mapped'],
+  ])('fails closed for %s', (_case, claims, statusCode, code) => {
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(request(claims), {} as Response, next);
+
+    const error = (next as jest.Mock).mock.calls[0][0] as AppError;
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.statusCode).toBe(statusCode);
+    expect(error.code).toBe(code);
+  });
+
+  it('requires a Cloud Run IAM bearer identity', () => {
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant({ headers: {} } as Request, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+  });
+});

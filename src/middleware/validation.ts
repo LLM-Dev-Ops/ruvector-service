@@ -147,7 +147,7 @@ export const ingestSchema = z.object({
   correlationId: z.string().uuid(),
   timestamp: z.string().datetime(),
   vector: z.array(z.number()).min(1),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   metadata: z.object({
     source: z.string().min(1),
     type: z.string().min(1),
@@ -160,7 +160,7 @@ export const querySchema = z.object({
   filters: z.object({
     source: z.union([z.string(), z.array(z.string())]).optional(),
     type: z.union([z.string(), z.array(z.string())]).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
   timeRange: z.object({
     start: z.string().datetime(),

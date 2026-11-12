@@ -18,6 +18,8 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'RUVVECTOR_DB_USER',
   'RUVVECTOR_DB_PASSWORD',
   'EXECUTION_HMAC_SECRET',
+  'RUVVECTOR_SERVICE_AUDIENCE',
+  'RUVVECTOR_PRINCIPAL_ORG_BINDINGS',
   // Has no default and hard-crashes assertEmbeddingDimension() when unset; listing it
   // here is what makes the reported "missing" count reflect what can actually crash startup.
   'RUVVECTOR_EMBEDDING_DIM',
@@ -42,6 +44,24 @@ const OPTIONAL_ENV_VARS = [
   'MAX_LATENCY_MS',
   'EXECUTION_ACCEPTANCE_TIMEOUT_MS',
 ] as const;
+
+export function assertDataPlaneIdentity(): void {
+  const audience = config.dataPlaneIdentity.serviceAudience;
+  if (!audience) {
+    throw new Error('FATAL: RUVVECTOR_SERVICE_AUDIENCE is required for tenant-bound data-plane routes.');
+  }
+
+  let bindings: unknown;
+  try {
+    bindings = JSON.parse(config.dataPlaneIdentity.principalOrgBindings);
+  } catch {
+    throw new Error('FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS must be valid JSON.');
+  }
+
+  if (!bindings || Array.isArray(bindings) || typeof bindings !== 'object' || Object.keys(bindings).length === 0) {
+    throw new Error('FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS must contain at least one principal mapping.');
+  }
+}
 
 export interface AssertionResult {
   valid: boolean;
@@ -227,6 +247,7 @@ export function runStartupAssertions(): {
   const maxLatencyMs = assertPerformanceBudget();
   assertEmbeddingDimension();
   assertExecutionAuthority();
+  assertDataPlaneIdentity();
   assertMemoryLayerRole();
 
   logger.info('All startup assertions passed');
@@ -239,6 +260,7 @@ export default {
   assertPerformanceBudget,
   assertEmbeddingDimension,
   assertExecutionAuthority,
+  assertDataPlaneIdentity,
   assertMemoryLayerRole,
   runStartupAssertions,
 };

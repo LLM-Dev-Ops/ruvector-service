@@ -51,6 +51,11 @@ interface Config {
     hmacSecret: string;            // HMAC-SHA256 signing secret for authority signatures
     acceptanceTimeoutMs: number;   // Max processing time for acceptance (ms)
   };
+
+  dataPlaneIdentity: {
+    serviceAudience: string;
+    principalOrgBindings: string;
+  };
 }
 
 /**
@@ -173,6 +178,11 @@ export const config: Config = {
   execution: {
     hmacSecret: getEnvVar('EXECUTION_HMAC_SECRET', ''),
     acceptanceTimeoutMs: getEnvNumber('EXECUTION_ACCEPTANCE_TIMEOUT_MS', 5000),
+  },
+
+  dataPlaneIdentity: {
+    serviceAudience: getEnvVar('RUVVECTOR_SERVICE_AUDIENCE', ''),
+    principalOrgBindings: getEnvVar('RUVVECTOR_PRINCIPAL_ORG_BINDINGS', '{}'),
   },
 };
 

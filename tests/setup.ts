@@ -25,6 +25,10 @@ process.env.ENABLE_METRICS = 'false';
 
 // Execution authority config for testing
 process.env.EXECUTION_HMAC_SECRET = 'test-hmac-secret-minimum-32-chars-long-for-testing-only';
+process.env.RUVVECTOR_SERVICE_AUDIENCE = 'https://ruvector.test';
+process.env.RUVVECTOR_PRINCIPAL_ORG_BINDINGS = JSON.stringify({
+  'platform@test.example': 'org-test',
+});
 
 // Increase timeout for integration tests
 jest.setTimeout(30000);

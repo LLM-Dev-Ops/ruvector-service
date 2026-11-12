@@ -68,6 +68,11 @@ import {
 } from './handlers/lineage';
 import { createErpMappingHandler, listErpMappingsHandler } from './handlers/erpMappings';
 import { createIntegrationProposalHandler, listIntegrationProposalsHandler } from './handlers/integrationProposals';
+import {
+  appendSimulationEventsHandler,
+  replaySimulationEventsHandler,
+} from './handlers/simulationEvents';
+import { requireDataPlaneTenant } from './middleware/tenantIdentity';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -332,6 +337,20 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   app.put('/v1/simulations/:id', (req, res, next) => {
     updateSimulationHandler(req, res, dbClient).catch(next);
   });
+
+  // Tenant-bound provider contract. Cloud Run IAM establishes transport
+  // identity; requireDataPlaneTenant binds that principal to one organization.
+  app.post('/v1/data-plane/simulation-events', requireDataPlaneTenant, (req, res, next) => {
+    appendSimulationEventsHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get(
+    '/v1/data-plane/simulations/:simulation_id/events',
+    requireDataPlaneTenant,
+    (req, res, next) => {
+      replaySimulationEventsHandler(req, res, dbClient).catch(next);
+    }
+  );
 
   // ============================================================================
   // Decision Approval API - Learning endpoint for executive synthesis

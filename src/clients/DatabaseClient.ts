@@ -411,6 +411,32 @@ export class DatabaseClient {
         ON executions(idempotency_key) WHERE idempotency_key IS NOT NULL
       `);
 
+      // Tenant-bound, append-only simulation event stream. Batch idempotency
+      // and per-simulation ordering are enforced in the shared RuVector store.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_simulation_events (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          simulation_id UUID NOT NULL,
+          seq INTEGER NOT NULL CHECK (seq > 0),
+          ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          kind VARCHAR(50) NOT NULL,
+          payload JSONB NOT NULL,
+          batch_idempotency_key VARCHAR(255) NOT NULL,
+          batch_index INTEGER NOT NULL CHECK (batch_index >= 0),
+          request_hash CHAR(64) NOT NULL,
+          CONSTRAINT data_plane_simulation_events_sequence_unique
+            UNIQUE (organization_id, simulation_id, seq),
+          CONSTRAINT data_plane_simulation_events_batch_unique
+            UNIQUE (organization_id, batch_idempotency_key, batch_index)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_simulation_events_replay
+        ON data_plane_simulation_events (organization_id, simulation_id, id)
+      `);
+
       // Create decision_events_ingested table for externally published decision events
       // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
       await this.pool.query(`
