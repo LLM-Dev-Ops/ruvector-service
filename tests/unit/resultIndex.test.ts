@@ -159,6 +159,24 @@ describe('tenant-bound result index provider', () => {
     expect(conflictClient.query.mock.calls[3][0]).toBe('ROLLBACK');
   });
 
+  it('rejects a second write to the same tenant run id and rolls back', async () => {
+    const client = { query: jest.fn(), release: jest.fn() };
+    client.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [stored(45)] })
+      .mockResolvedValueOnce({ rows: [] });
+    const db = { getClient: jest.fn().mockResolvedValue(client) };
+
+    await expect(storeResultIndexHandler(request({
+      idempotency_key: 'different-key',
+      result: result(),
+    }), response(), db as any)).rejects.toMatchObject({ statusCode: 409, code: 'run_conflict' });
+    expect(client.query.mock.calls[4][0]).toBe('ROLLBACK');
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves run, execution, or simulation IDs only inside the authenticated tenant', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [stored(44)] }) };
     const res = response();
@@ -169,6 +187,23 @@ describe('tenant-bound result index provider', () => {
     expect(db.query.mock.calls[0][0]).toContain('run_id = $2 OR execution_id = $2 OR simulation_id = $2');
     expect(db.query.mock.calls[0][1]).toEqual(['org-test', 'exec-1']);
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('rejects invalid result identifiers and missing tenant results', async () => {
+    const invalid = request();
+    invalid.params = { result_id: '' };
+    const db = { query: jest.fn() };
+    await expect(getResultIndexHandler(invalid, response(), db as any)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'validation_error',
+    });
+    expect(db.query).not.toHaveBeenCalled();
+
+    db.query.mockResolvedValue({ rows: [] });
+    await expect(getResultIndexHandler(request(), response(), db as any)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'result_not_found',
+    });
   });
 
   it('lists a stable tenant cursor with bound filters', async () => {
@@ -186,5 +221,23 @@ describe('tenant-bound result index provider', () => {
       organization_id: 'org-test',
       next_after_id: '52',
     }));
+  });
+
+  it.each([
+    [{ after_id: '-1' }, 'after_id'],
+    [{ after_id: 'not-an-integer' }, 'after_id'],
+    [{ environment: '' }, 'environment'],
+    [{ status: ['completed', 'failed'] }, 'status'],
+  ])('rejects an invalid replay query %#', async (query, field) => {
+    const req = request();
+    req.query = query;
+    const db = { query: jest.fn() };
+
+    await expect(listResultIndexHandler(req, response(), db as any)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'validation_error',
+      message: expect.stringContaining(field),
+    });
+    expect(db.query).not.toHaveBeenCalled();
   });
 });
