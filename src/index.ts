@@ -88,8 +88,11 @@ import {
   getUsageBalanceHandler,
 } from './handlers/usageLedger';
 import {
+  authorizeCliSessionHandler,
+  createCliSessionHandler,
   lookupApiKeyHandler,
   lookupEntitlementHandler,
+  pollCliSessionHandler,
 } from './handlers/identityProvider';
 
 /**
@@ -419,6 +422,22 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
 
   app.post('/v1/data-plane/identity/entitlements/lookup', requireIdentityProviderCaller, (req, res, next) => {
     lookupEntitlementHandler(req, res, dbClient).catch(next);
+  });
+
+  // CLI device authorization keeps transport and application identity
+  // separate: Cloud Run authenticates the allowlisted platform caller through
+  // X-Serverless-Authorization, while the authorize route verifies the
+  // end-user JWT carried in Authorization.
+  app.post('/v1/data-plane/identity/cli/sessions', requireIdentityProviderCaller, (req, res, next) => {
+    createCliSessionHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/identity/cli/sessions/:device_code', requireIdentityProviderCaller, (req, res, next) => {
+    pollCliSessionHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/identity/cli/sessions/:session_code/authorize', requireIdentityProviderCaller, (req, res, next) => {
+    authorizeCliSessionHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================

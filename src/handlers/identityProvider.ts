@@ -1,11 +1,19 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import {
   IdentityApiKeyLookupSchema,
   IdentityApiKeyResponseSchema,
+  IdentityCliSessionAuthorizeSchema,
+  IdentityCliSessionAuthorizedSchema,
+  IdentityCliSessionCreateSchema,
+  IdentityCliSessionCreatedSchema,
+  IdentityCliSessionPollSchema,
   IdentityEntitlementResponseSchema,
 } from '@llm-dev-ops/contracts';
 import { DatabaseClient } from '../clients/DatabaseClient';
+import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
+import { VerifiedEndUser, verifyEndUserJwt } from '../utils/identityJwt';
 
 interface ApiKeyRow {
   key_id: string;
@@ -23,6 +31,111 @@ interface EntitlementRow {
   max_requests: number | string;
   max_tokens: number | string;
   max_api_keys: number | string;
+}
+
+interface IdentityMembershipRow {
+  issuer: string;
+  subject: string;
+  organization_id: string;
+  email: string;
+  payment_status: 'paid' | 'unpaid' | 'trial' | 'internal';
+  role: 'owner';
+}
+
+interface CliSessionRow {
+  session_code: string;
+  status: 'pending' | 'completed';
+  requested_scopes: string[];
+  organization_id: string | null;
+  key_id: string | null;
+  encrypted_api_key: string | null;
+  expires_at: Date | string;
+  email: string | null;
+  payment_status: 'paid' | 'unpaid' | 'trial' | 'internal' | null;
+  role: 'owner' | null;
+}
+
+export type EndUserVerifier = (token: string) => Promise<VerifiedEndUser>;
+
+const SESSION_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function configuredArray(value: string, name: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new AppError(503, 'identity_configuration_error', `${name} is not valid JSON`);
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== 'string')) {
+    throw new AppError(503, 'identity_configuration_error', `${name} is not configured`);
+  }
+  return parsed;
+}
+
+function allowedScopes(): Set<string> {
+  return new Set(configuredArray(config.dataPlaneIdentity.allowedScopes, 'Identity allowed scopes'));
+}
+
+function requestedScopes(scopes: string[] | undefined): string[] {
+  const selected = scopes?.length
+    ? scopes
+    : configuredArray(config.dataPlaneIdentity.defaultScopes, 'Identity default scopes');
+  const allowed = allowedScopes();
+  if (selected.some((scope) => !allowed.has(scope))) {
+    throw new AppError(400, 'scope_not_allowed', 'CLI session requested an unsupported scope');
+  }
+  return [...new Set(selected)];
+}
+
+function sessionCode(): string {
+  const bytes = randomBytes(8);
+  return Array.from(bytes, (value) => SESSION_ALPHABET[value % SESSION_ALPHABET.length]).join('');
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function encryptionKey(): Buffer {
+  const key = Buffer.from(config.dataPlaneIdentity.sessionEncryptionKey, 'base64');
+  if (key.length !== 32) {
+    throw new AppError(503, 'identity_configuration_error', 'CLI session encryption key is invalid');
+  }
+  return key;
+}
+
+function encryptApiKey(value: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url')).join('.');
+}
+
+function decryptApiKey(value: string): string {
+  const parts = value.split('.').map((part) => Buffer.from(part, 'base64url'));
+  if (parts.length !== 3 || parts[0].length !== 12 || parts[1].length !== 16) {
+    throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope is invalid');
+  }
+  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), parts[0]);
+  decipher.setAuthTag(parts[1]);
+  try {
+    return Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString('utf8');
+  } catch {
+    throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope cannot be authenticated');
+  }
+}
+
+function endUserToken(req: Request): string {
+  const header = req.headers.authorization;
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value?.startsWith('Bearer ')) {
+    throw new AppError(401, 'end_user_authentication_required', 'End-user JWT is required');
+  }
+  const token = value.slice('Bearer '.length);
+  if (token.startsWith('agentics_')) {
+    throw new AppError(401, 'end_user_jwt_required', 'API keys cannot authorize CLI sessions');
+  }
+  return token;
 }
 
 function timestamp(value: Date | string | null): string | null {
@@ -95,4 +208,195 @@ export async function lookupEntitlementHandler(
     max_tokens: Number(row.max_tokens),
     max_api_keys: Number(row.max_api_keys),
   }));
+}
+
+export async function createCliSessionHandler(
+  req: Request,
+  res: Response,
+  db: DatabaseClient
+): Promise<void> {
+  const parsed = IdentityCliSessionCreateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    throw new AppError(400, 'validation_error', 'CLI session request is invalid', parsed.error.issues);
+  }
+  const scopes = requestedScopes(parsed.data.scopes);
+  const code = sessionCode();
+  const deviceCode = randomBytes(32).toString('hex');
+  const inserted = await db.query<{ expires_at: Date | string }>(
+    `INSERT INTO data_plane_cli_sessions
+       (session_code, device_code_hash, cli_name, cli_version, hostname, requested_scopes, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,NOW() + INTERVAL '10 minutes')
+     RETURNING expires_at`,
+    [code, sha256(deviceCode), parsed.data.cli_name ?? null, parsed.data.cli_version ?? null,
+      parsed.data.hostname ?? null, JSON.stringify(scopes)]
+  );
+  const verification = new URL(config.dataPlaneIdentity.verificationUrl);
+  verification.searchParams.set('code', code);
+  res.status(201).json(IdentityCliSessionCreatedSchema.parse({
+    session_code: code,
+    device_code: deviceCode,
+    verification_url: verification.toString(),
+    expires_at: timestamp(inserted.rows[0].expires_at),
+    expires_in_seconds: 600,
+    poll_interval_seconds: 5,
+  }));
+}
+
+export async function authorizeCliSessionHandler(
+  req: Request,
+  res: Response,
+  db: DatabaseClient,
+  verify: EndUserVerifier = verifyEndUserJwt
+): Promise<void> {
+  const parsed = IdentityCliSessionAuthorizeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new AppError(400, 'validation_error', 'CLI session authorization is invalid', parsed.error.issues);
+  }
+  const routeCode = String(req.params.session_code ?? '');
+  if (parsed.data.session_code !== routeCode) {
+    throw new AppError(400, 'session_code_mismatch', 'CLI session code does not match the route');
+  }
+  const user = await verify(endUserToken(req));
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`cli-session:${routeCode}`]);
+    const membershipResult = await client.query<IdentityMembershipRow>(
+      `SELECT issuer, subject, organization_id, email, payment_status, role
+         FROM data_plane_identity_memberships
+        WHERE issuer = $1 AND subject = $2 AND is_active = TRUE
+        FOR SHARE`,
+      [user.issuer, user.subject]
+    );
+    const membership = membershipResult.rows[0];
+    if (!membership) {
+      throw new AppError(403, 'identity_membership_required', 'Verified user has no active tenant membership');
+    }
+    if (user.email && user.email !== membership.email.toLowerCase()) {
+      throw new AppError(403, 'identity_membership_mismatch', 'Verified user identity does not match tenant membership');
+    }
+
+    const selected = await client.query<CliSessionRow>(
+      `SELECT session_code, status, requested_scopes, organization_id, key_id,
+              encrypted_api_key, expires_at, NULL::text AS email,
+              NULL::text AS payment_status, NULL::text AS role
+         FROM data_plane_cli_sessions
+        WHERE session_code = $1
+        FOR UPDATE`,
+      [routeCode]
+    );
+    const session = selected.rows[0];
+    if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+      throw new AppError(410, 'session_expired', 'CLI session has expired');
+    }
+    if (session.status === 'completed') {
+      if (session.organization_id !== membership.organization_id || !session.key_id) {
+        throw new AppError(409, 'session_already_authorized', 'CLI session belongs to another tenant');
+      }
+      await client.query('COMMIT');
+      res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
+        success: true,
+        organization_id: membership.organization_id,
+        key_id: session.key_id,
+      }));
+      return;
+    }
+
+    const storedScopes = Array.isArray(session.requested_scopes) ? session.requested_scopes : [];
+    const scopes = parsed.data.scopes?.length ? parsed.data.scopes : storedScopes;
+    const allowed = allowedScopes();
+    if (scopes.some((scope) => !allowed.has(scope) || !storedScopes.includes(scope))) {
+      throw new AppError(400, 'scope_escalation', 'Authorized scopes must be a subset of requested scopes');
+    }
+    const plaintextKey = `agentics_sk_cli_${randomBytes(32).toString('hex')}`;
+    const keyId = randomUUID();
+    await client.query(
+      `INSERT INTO data_plane_api_keys
+         (key_id, organization_id, name, scopes, key_hash, is_active)
+       VALUES ($1,$2,$3,$4,$5,TRUE)`,
+      [keyId, membership.organization_id, parsed.data.key_name ?? `CLI Key ${new Date().toISOString().slice(0, 10)}`,
+        JSON.stringify(scopes), sha256(plaintextKey)]
+    );
+    await client.query(
+      `UPDATE data_plane_cli_sessions
+          SET status = 'completed', authorized_issuer = $2, authorized_subject = $3,
+              organization_id = $4, key_id = $5, encrypted_api_key = $6, completed_at = NOW()
+        WHERE session_code = $1`,
+      [routeCode, membership.issuer, membership.subject, membership.organization_id,
+        keyId, encryptApiKey(plaintextKey)]
+    );
+    await client.query('COMMIT');
+    res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
+      success: true,
+      organization_id: membership.organization_id,
+      key_id: keyId,
+    }));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function pollCliSessionHandler(
+  req: Request,
+  res: Response,
+  db: DatabaseClient
+): Promise<void> {
+  const deviceCode = String(req.params.device_code ?? '');
+  if (!/^[a-f0-9]{64}$/.test(deviceCode)) {
+    throw new AppError(400, 'validation_error', 'device_code must be 64 lowercase hexadecimal characters');
+  }
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    const selected = await client.query<CliSessionRow>(
+      `SELECT s.session_code, s.status, s.requested_scopes, s.organization_id, s.key_id,
+              s.encrypted_api_key, s.expires_at, m.email, m.payment_status, m.role
+         FROM data_plane_cli_sessions s
+         LEFT JOIN data_plane_identity_memberships m
+           ON m.issuer = s.authorized_issuer AND m.subject = s.authorized_subject
+        WHERE s.device_code_hash = $1
+        FOR UPDATE OF s`,
+      [sha256(deviceCode)]
+    );
+    const session = selected.rows[0];
+    if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+      throw new AppError(410, 'session_expired', 'CLI session has expired');
+    }
+    if (session.status === 'pending') {
+      await client.query('COMMIT');
+      res.status(200).json(IdentityCliSessionPollSchema.parse({ status: 'pending' }));
+      return;
+    }
+    if (!session.organization_id || !session.email || !session.payment_status || session.role !== 'owner') {
+      throw new AppError(500, 'invalid_session_identity', 'Completed CLI session lacks tenant identity');
+    }
+    const plaintextKey = session.encrypted_api_key ? decryptApiKey(session.encrypted_api_key) : undefined;
+    if (plaintextKey) {
+      await client.query(
+        `UPDATE data_plane_cli_sessions
+            SET encrypted_api_key = NULL, key_delivered_at = NOW()
+          WHERE session_code = $1`,
+        [session.session_code]
+      );
+    }
+    await client.query('COMMIT');
+    res.status(200).json(IdentityCliSessionPollSchema.parse({
+      status: 'completed',
+      ...(plaintextKey ? { api_key: plaintextKey } : {}),
+      email: session.email,
+      payment_status: session.payment_status,
+      organization_id: session.organization_id,
+      role: session.role,
+    }));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }

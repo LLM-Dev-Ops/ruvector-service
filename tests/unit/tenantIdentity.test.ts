@@ -78,6 +78,26 @@ describe('tenant-bound data-plane identity', () => {
     });
   });
 
+  it('keeps Cloud Run transport identity separate from the end-user JWT', () => {
+    const iam = token({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    });
+    const req = {
+      headers: {
+        'x-serverless-authorization': `Bearer ${iam}`,
+        authorization: 'Bearer end-user-jwt',
+      },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireIdentityProviderCaller(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.identityProviderCaller.principal).toBe('platform@test.example');
+  });
+
   it('rejects an IAM principal that is not allowlisted for identity bootstrap', () => {
     const next = jest.fn() as NextFunction;
     requireIdentityProviderCaller(request({

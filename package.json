@@ -28,6 +28,8 @@
     "@llm-dev-ops/contracts": "github:LLM-Dev-Ops/agentics-contracts#5bcdc926a78cf9c78072f5fbef2280cb437927f7",
     "dotenv": "^16.3.1",
     "express": "4.22.3",
+    "jsonwebtoken": "9.0.3",
+    "jwks-rsa": "3.2.0",
     "pg": "^8.16.3",
     "pino": "^8.16.2",
     "pino-http": "^8.5.1",
@@ -38,6 +40,7 @@
   "devDependencies": {
     "@types/express": "4.17.25",
     "@types/jest": "^29.5.11",
+    "@types/jsonwebtoken": "9.0.10",
     "@types/node": "^20.10.6",
     "@types/pg": "^8.16.0",
     "@types/supertest": "7.2.0",

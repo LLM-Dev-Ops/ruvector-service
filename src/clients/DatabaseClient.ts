@@ -570,6 +570,56 @@ export class DatabaseClient {
         ON data_plane_api_keys (organization_id, key_id)
       `);
 
+      // Verified JWT subjects are provisioned to exactly one tenant through
+      // this provider-owned membership map. CLI authorization never accepts a
+      // caller-supplied organization id and never auto-creates a tenant.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_identity_memberships (
+          issuer TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          organization_id VARCHAR(255) NOT NULL REFERENCES data_plane_identity_organizations(organization_id),
+          email TEXT NOT NULL,
+          payment_status VARCHAR(16) NOT NULL CHECK (payment_status IN ('paid', 'unpaid', 'trial', 'internal')),
+          role VARCHAR(16) NOT NULL DEFAULT 'owner' CHECK (role = 'owner'),
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (issuer, subject)
+        )
+      `);
+
+      // Device codes are stored only as hashes. The one-time API key is
+      // AES-GCM encrypted under a runtime-managed key and erased atomically on
+      // first successful poll.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_cli_sessions (
+          session_code CHAR(8) PRIMARY KEY CHECK (session_code ~ '^[A-Z0-9]{8}$'),
+          device_code_hash CHAR(64) NOT NULL UNIQUE CHECK (device_code_hash ~ '^[a-f0-9]{64}$'),
+          status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed')),
+          cli_name VARCHAR(255),
+          cli_version VARCHAR(255),
+          hostname VARCHAR(255),
+          requested_scopes JSONB NOT NULL,
+          authorized_issuer TEXT,
+          authorized_subject TEXT,
+          organization_id VARCHAR(255) REFERENCES data_plane_identity_organizations(organization_id),
+          key_id UUID REFERENCES data_plane_api_keys(key_id),
+          encrypted_api_key TEXT,
+          expires_at TIMESTAMPTZ NOT NULL,
+          completed_at TIMESTAMPTZ,
+          key_delivered_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_cli_sessions_identity_fk
+            FOREIGN KEY (authorized_issuer, authorized_subject)
+            REFERENCES data_plane_identity_memberships(issuer, subject)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_cli_sessions_expiry
+        ON data_plane_cli_sessions (status, expires_at)
+      `);
+
       await this.pool.query(`
         CREATE OR REPLACE VIEW data_plane_identity_lookup AS
         SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at,

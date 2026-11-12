@@ -56,6 +56,13 @@ interface Config {
     serviceAudience: string;
     principalOrgBindings: string;
     identityCallerPrincipals: string;
+    jwtIssuer: string;
+    jwtAudience: string;
+    jwksUri: string;
+    verificationUrl: string;
+    sessionEncryptionKey: string;
+    allowedScopes: string;
+    defaultScopes: string;
   };
 }
 
@@ -185,6 +192,13 @@ export const config: Config = {
     serviceAudience: getEnvVar('RUVVECTOR_SERVICE_AUDIENCE', ''),
     principalOrgBindings: getEnvVar('RUVVECTOR_PRINCIPAL_ORG_BINDINGS', '{}'),
     identityCallerPrincipals: getEnvVar('RUVVECTOR_IDENTITY_CALLER_PRINCIPALS', '[]'),
+    jwtIssuer: getEnvVar('RUVVECTOR_IDENTITY_JWT_ISSUER', ''),
+    jwtAudience: getEnvVar('RUVVECTOR_IDENTITY_JWT_AUDIENCE', ''),
+    jwksUri: getEnvVar('RUVVECTOR_IDENTITY_JWKS_URI', ''),
+    verificationUrl: getEnvVar('RUVVECTOR_IDENTITY_VERIFICATION_URL', ''),
+    sessionEncryptionKey: getEnvVar('RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY', ''),
+    allowedScopes: getEnvVar('RUVVECTOR_IDENTITY_ALLOWED_SCOPES', '[]'),
+    defaultScopes: getEnvVar('RUVVECTOR_IDENTITY_DEFAULT_SCOPES', '[]'),
   },
 };
 

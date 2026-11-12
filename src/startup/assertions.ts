@@ -21,6 +21,13 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'RUVVECTOR_SERVICE_AUDIENCE',
   'RUVVECTOR_PRINCIPAL_ORG_BINDINGS',
   'RUVVECTOR_IDENTITY_CALLER_PRINCIPALS',
+  'RUVVECTOR_IDENTITY_JWT_ISSUER',
+  'RUVVECTOR_IDENTITY_JWT_AUDIENCE',
+  'RUVVECTOR_IDENTITY_JWKS_URI',
+  'RUVVECTOR_IDENTITY_VERIFICATION_URL',
+  'RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY',
+  'RUVVECTOR_IDENTITY_ALLOWED_SCOPES',
+  'RUVVECTOR_IDENTITY_DEFAULT_SCOPES',
   // Has no default and hard-crashes assertEmbeddingDimension() when unset; listing it
   // here is what makes the reported "missing" count reflect what can actually crash startup.
   'RUVVECTOR_EMBEDDING_DIM',
@@ -75,6 +82,49 @@ export function assertDataPlaneIdentity(): void {
     identityCallers.some((principal) => typeof principal !== 'string' || !principal.includes('@'))
   ) {
     throw new Error('FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS must contain at least one service principal.');
+  }
+
+  for (const [name, value] of [
+    ['RUVVECTOR_IDENTITY_JWT_ISSUER', config.dataPlaneIdentity.jwtIssuer],
+    ['RUVVECTOR_IDENTITY_JWT_AUDIENCE', config.dataPlaneIdentity.jwtAudience],
+    ['RUVVECTOR_IDENTITY_JWKS_URI', config.dataPlaneIdentity.jwksUri],
+    ['RUVVECTOR_IDENTITY_VERIFICATION_URL', config.dataPlaneIdentity.verificationUrl],
+  ] as const) {
+    if (!value) throw new Error(`FATAL: ${name} is required for CLI identity sessions.`);
+  }
+  for (const [name, value] of [
+    ['RUVVECTOR_IDENTITY_JWT_ISSUER', config.dataPlaneIdentity.jwtIssuer],
+    ['RUVVECTOR_IDENTITY_JWKS_URI', config.dataPlaneIdentity.jwksUri],
+    ['RUVVECTOR_IDENTITY_VERIFICATION_URL', config.dataPlaneIdentity.verificationUrl],
+  ] as const) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'https:') throw new Error('not https');
+    } catch {
+      throw new Error(`FATAL: ${name} must be an HTTPS URL.`);
+    }
+  }
+
+  const encryptionKey = Buffer.from(config.dataPlaneIdentity.sessionEncryptionKey, 'base64');
+  if (encryptionKey.length !== 32 || encryptionKey.toString('base64') !== config.dataPlaneIdentity.sessionEncryptionKey) {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY must be canonical base64 for exactly 32 bytes.');
+  }
+
+  let allowedScopes: unknown;
+  let defaultScopes: unknown;
+  try {
+    allowedScopes = JSON.parse(config.dataPlaneIdentity.allowedScopes);
+    defaultScopes = JSON.parse(config.dataPlaneIdentity.defaultScopes);
+  } catch {
+    throw new Error('FATAL: identity scope configuration must be valid JSON.');
+  }
+  if (!Array.isArray(allowedScopes) || allowedScopes.length === 0 ||
+      allowedScopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_ALLOWED_SCOPES must contain at least one scope.');
+  }
+  if (!Array.isArray(defaultScopes) || defaultScopes.length === 0 ||
+      defaultScopes.some((scope) => typeof scope !== 'string' || !allowedScopes.includes(scope))) {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_DEFAULT_SCOPES must be a non-empty subset of allowed scopes.');
   }
 }
 
