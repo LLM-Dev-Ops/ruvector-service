@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { Request, Response } from 'express';
 import {
   IdentityApiKeyLookupSchema,
@@ -67,6 +67,7 @@ interface CliSessionMembershipRow {
 
 interface ActiveApiKeyRow {
   key_id: string;
+  key_hash: string;
 }
 
 export type EndUserVerifier = (token: string) => Promise<VerifiedEndUser>;
@@ -431,9 +432,10 @@ export async function pollCliSessionHandler(
     if (!membership || membership.role !== 'owner') {
       throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
     }
+    let activeKey: ActiveApiKeyRow | undefined;
     if (session.encrypted_api_key) {
       const keyResult = await client.query<ActiveApiKeyRow>(
-        `SELECT key_id
+        `SELECT key_id, key_hash
            FROM data_plane_api_keys
           WHERE key_id = $1 AND organization_id = $2
             AND is_active = TRUE AND revoked_at IS NULL
@@ -444,9 +446,19 @@ export async function pollCliSessionHandler(
       if (!keyResult.rows[0]) {
         throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
       }
+      activeKey = keyResult.rows[0];
     }
     const plaintextKey = session.encrypted_api_key ? decryptApiKey(session.encrypted_api_key) : undefined;
     if (plaintextKey) {
+      const plaintextHash = sha256(plaintextKey);
+      if (!activeKey || !/^[a-f0-9]{64}$/.test(activeKey.key_hash) ||
+          !timingSafeEqual(Buffer.from(plaintextHash, 'hex'), Buffer.from(activeKey.key_hash, 'hex'))) {
+        throw new AppError(
+          500,
+          'session_api_key_binding_mismatch',
+          'Encrypted CLI key is not bound to the authorized API key'
+        );
+      }
       await client.query(
         `UPDATE data_plane_cli_sessions
             SET encrypted_api_key = NULL, key_delivered_at = NOW()

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { createHash } from 'crypto';
+import { createCipheriv, createHash } from 'crypto';
 import {
   authorizeCliSessionHandler,
   createCliSessionHandler,
@@ -9,6 +9,13 @@ import {
 } from '../../src/handlers/identityProvider';
 
 const keyHash = 'a'.repeat(64);
+
+function encryptedDelivery(value: string): string {
+  const iv = Buffer.alloc(12, 3);
+  const cipher = createCipheriv('aes-256-gcm', Buffer.alloc(32, 7), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url')).join('.');
+}
 
 function response(): Response {
   return {
@@ -164,6 +171,7 @@ describe('IAM-scoped identity provider', () => {
         }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
           key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          key_hash: insertedKeyHash,
         }] };
         return { rows: [] };
       }),
@@ -471,6 +479,37 @@ describe('IAM-scoped identity provider', () => {
     expect(keySql).toContain('expires_at IS NULL OR expires_at > NOW()');
     expect(keySql).toContain('FOR SHARE');
     expect(keyCall?.[1]).toEqual(['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']);
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+  });
+
+  it('refuses delivery when the encrypted copy does not hash to the authorized key', async () => {
+    const encryptedKey = encryptedDelivery(`agentics_sk_cli_${'1'.repeat(64)}`);
+    const client = {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'b'.repeat(64),
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'a'.repeat(64) } } as unknown as Request,
+      response(), { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'session_api_key_binding_mismatch' });
+
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
