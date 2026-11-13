@@ -201,9 +201,18 @@ describe('IAM-scoped identity provider', () => {
       ['identity-api-keys:org-test']
     );
     expect(authorizationClient.query).toHaveBeenCalledWith(
-      expect.stringMatching(/expires_at > NOW\(\)[\s\S]*AS is_unexpired[\s\S]*FOR UPDATE/),
+      expect.stringMatching(/FROM data_plane_cli_sessions[\s\S]*FOR UPDATE/),
       ['ABCDEFGH']
     );
+    expect(authorizationClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/expires_at > clock_timestamp\(\)[\s\S]*AS is_unexpired/),
+      ['ABCDEFGH']
+    );
+    const authorizationLockIndex = authorizationClient.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_cli_sessions[\s\S]*FOR UPDATE/.test(String(sql)));
+    const authorizationExpiryIndex = authorizationClient.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('expires_at > clock_timestamp()'));
+    expect(authorizationExpiryIndex).toBeGreaterThan(authorizationLockIndex);
     expect(encryptedKey).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(encryptedKey).not.toContain('agentics_sk_cli_');
 
@@ -246,9 +255,18 @@ describe('IAM-scoped identity provider', () => {
       ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
     );
     expect(pollClient.query).toHaveBeenCalledWith(
-      expect.stringMatching(/s\.expires_at > NOW\(\)[\s\S]*AS is_unexpired[\s\S]*FOR UPDATE/),
+      expect.stringMatching(/FROM data_plane_cli_sessions s[\s\S]*FOR UPDATE/),
       [createHash('sha256').update(deviceCode).digest('hex')]
     );
+    expect(pollClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/s\.expires_at > clock_timestamp\(\)[\s\S]*AS is_unexpired/),
+      ['ABCDEFGH']
+    );
+    const pollLockIndex = pollClient.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_cli_sessions s[\s\S]*FOR UPDATE/.test(String(sql)));
+    const pollExpiryIndex = pollClient.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('expires_at > clock_timestamp()'));
+    expect(pollExpiryIndex).toBeGreaterThan(pollLockIndex);
     expect(pollClient.query).toHaveBeenCalledWith(expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']);
   });
 
