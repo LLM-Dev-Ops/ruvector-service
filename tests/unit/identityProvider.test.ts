@@ -110,6 +110,7 @@ describe('IAM-scoped identity provider', () => {
   it.each([
     ['retired scope', ['simulation:run', 'tenant:admin']],
     ['duplicate scope', ['simulation:run', 'simulation:run']],
+    ['empty scope list', []],
     ['malformed persisted scope list', { scope: 'simulation:run' }],
   ])('fails closed without disclosing a key with a %s', async (_case, scopes) => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{
@@ -354,14 +355,23 @@ describe('IAM-scoped identity provider', () => {
       response(),
       db as never
     )).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(createCliSessionHandler(
+      { body: { scopes: [] } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.query).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects duplicate authorization scopes before identity or persistence access', async () => {
+  it.each([
+    ['duplicate', ['platform:read', 'platform:read']],
+    ['empty', []],
+  ])('rejects %s authorization scopes before identity or persistence access', async (_case, scopes) => {
     const verify = jest.fn();
     const db = { getClient: jest.fn() };
     await expect(authorizeCliSessionHandler({
       params: { session_code: 'ABCDEFGH' },
-      body: { session_code: 'ABCDEFGH', scopes: ['platform:read', 'platform:read'] },
+      body: { session_code: 'ABCDEFGH', scopes },
       headers: { authorization: 'Bearer verified-user-jwt' },
     } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
       code: 'validation_error',
