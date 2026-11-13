@@ -209,6 +209,25 @@ describe('IAM-scoped identity provider', () => {
     await expect(createCliSessionHandler(
       { body: { scopes: [1] } } as unknown as Request, response(), db as never
     )).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(createCliSessionHandler(
+      { body: { scopes: ['platform:read', 'platform:read'] } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('rejects duplicate authorization scopes before identity or persistence access', async () => {
+    const verify = jest.fn();
+    const db = { getClient: jest.fn() };
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', scopes: ['platform:read', 'platform:read'] },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
   });
 
   it.each([
