@@ -550,15 +550,6 @@ export class DatabaseClient {
         )
       `);
 
-      // Older provider revisions created max_api_keys as a 32-bit INTEGER even
-      // though the authority permits the full lossless JSON integer range.
-      // Widening INTEGER to BIGINT is lossless and keeps existing deployments
-      // compatible with the authoritative entitlement contract.
-      await this.pool.query(`
-        ALTER TABLE data_plane_identity_organizations
-        ALTER COLUMN max_api_keys TYPE BIGINT
-      `);
-
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS data_plane_api_keys (
           key_id UUID PRIMARY KEY,
@@ -577,6 +568,24 @@ export class DatabaseClient {
       await this.pool.query(`
         CREATE INDEX IF NOT EXISTS idx_data_plane_api_keys_organization
         ON data_plane_api_keys (organization_id, key_id)
+      `);
+
+      // Older provider revisions created max_api_keys as a 32-bit INTEGER even
+      // though the authority permits the full lossless JSON integer range.
+      // The lookup view depends on this column, so replace the view around the
+      // lossless widening in one transaction. Existing callers never observe a
+      // missing view, and a failed migration restores the previous definition.
+      await this.pool.query(`
+        BEGIN;
+        DROP VIEW IF EXISTS data_plane_identity_lookup;
+        ALTER TABLE data_plane_identity_organizations
+          ALTER COLUMN max_api_keys TYPE BIGINT;
+        CREATE VIEW data_plane_identity_lookup AS
+        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at,
+               o.organization_id, o.plan, o.max_requests, o.max_tokens, o.max_api_keys
+          FROM data_plane_api_keys k
+          JOIN data_plane_identity_organizations o USING (organization_id);
+        COMMIT;
       `);
 
       // Verified JWT subjects are provisioned to exactly one tenant through
@@ -627,14 +636,6 @@ export class DatabaseClient {
       await this.pool.query(`
         CREATE INDEX IF NOT EXISTS idx_data_plane_cli_sessions_expiry
         ON data_plane_cli_sessions (status, expires_at)
-      `);
-
-      await this.pool.query(`
-        CREATE OR REPLACE VIEW data_plane_identity_lookup AS
-        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at,
-               o.organization_id, o.plan, o.max_requests, o.max_tokens, o.max_api_keys
-          FROM data_plane_api_keys k
-          JOIN data_plane_identity_organizations o USING (organization_id)
       `);
 
       // Create decision_events_ingested table for externally published decision events
