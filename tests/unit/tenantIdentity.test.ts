@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { AppError } from '../../src/middleware/errorHandler';
 import { requireDataPlaneTenant, requireIdentityProviderCaller } from '../../src/middleware/tenantIdentity';
+import { config } from '../../src/config';
 
 function token(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -15,6 +16,12 @@ function request(payload: Record<string, unknown>): Request {
 }
 
 describe('tenant-bound data-plane identity', () => {
+  const originalBindings = config.dataPlaneIdentity.principalOrgBindings;
+
+  afterEach(() => {
+    config.dataPlaneIdentity.principalOrgBindings = originalBindings;
+  });
+
   it('derives organization scope from the configured IAM principal binding', () => {
     const req = request({
       aud: 'https://ruvector.test',
@@ -58,6 +65,27 @@ describe('tenant-bound data-plane identity', () => {
       statusCode: 401,
       code: 'unauthenticated',
     });
+  });
+
+  it.each([
+    ['case-insensitive duplicate principals', '{"Platform@test.example":"org-a","platform@test.example":"org-b"}'],
+    ['non-string organization identifiers', '{"platform@test.example":42}'],
+    ['empty organization identifiers', '{"platform@test.example":""}'],
+    ['malformed principal keys', '{"not-an-email":"org-a"}'],
+  ])('fails closed at request time for %s', (_case, bindings) => {
+    config.dataPlaneIdentity.principalOrgBindings = bindings;
+    const req = request({
+      aud: 'https://ruvector.test', email: 'platform@test.example', sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 503,
+      code: 'identity_configuration_error',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
   it('allows an explicitly configured IAM principal to perform identity bootstrap', () => {

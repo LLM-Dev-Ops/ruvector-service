@@ -7,6 +7,7 @@
 import logger from '../utils/logger';
 import { config, configDeprecations } from '../config';
 import { assertValidDimension } from '../clients/vectorSchema';
+import { parsePrincipalOrgBindings } from '../utils/principalBindings';
 
 /**
  * Required environment variables for production operation.
@@ -59,15 +60,12 @@ export function assertDataPlaneIdentity(): void {
     throw new Error('FATAL: RUVVECTOR_SERVICE_AUDIENCE is required for tenant-bound data-plane routes.');
   }
 
-  let bindings: unknown;
   try {
-    bindings = JSON.parse(config.dataPlaneIdentity.principalOrgBindings);
-  } catch {
-    throw new Error('FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS must be valid JSON.');
-  }
-
-  if (!bindings || Array.isArray(bindings) || typeof bindings !== 'object' || Object.keys(bindings).length === 0) {
-    throw new Error('FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS must contain at least one principal mapping.');
+    parsePrincipalOrgBindings(config.dataPlaneIdentity.principalOrgBindings);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Principal bindings are invalid';
+    const detail = reason.replace(/^Principal bindings /, '');
+    throw new Error(`FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS ${detail}.`);
   }
 
   let identityCallers: unknown;

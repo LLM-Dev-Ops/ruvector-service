@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { DataPlanePrincipalSchema, type DataPlanePrincipal } from '@llm-dev-ops/contracts';
 import { config } from '../config';
 import { AppError } from './errorHandler';
+import { parsePrincipalOrgBindings } from '../utils/principalBindings';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -73,18 +74,15 @@ function identityCallerPrincipals(): Set<string> {
 }
 
 function principalBindings(): Record<string, string> {
-  let value: unknown;
   try {
-    value = JSON.parse(config.dataPlaneIdentity.principalOrgBindings);
-  } catch {
-    throw new AppError(503, 'identity_configuration_error', 'Principal bindings are not valid JSON');
+    return parsePrincipalOrgBindings(config.dataPlaneIdentity.principalOrgBindings);
+  } catch (error) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      error instanceof Error ? error.message : 'Principal bindings are invalid'
+    );
   }
-  if (!value || Array.isArray(value) || typeof value !== 'object') {
-    throw new AppError(503, 'identity_configuration_error', 'Principal bindings are not configured');
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([principal, organization]) => [principal.toLowerCase(), String(organization)])
-  );
 }
 
 export function requireDataPlaneTenant(req: Request, _res: Response, next: NextFunction): void {

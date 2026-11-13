@@ -50,6 +50,10 @@ describe('identity provider startup assertions', () => {
   it.each([
     ['empty bindings', 'principalOrgBindings', '{}', /at least one principal mapping/],
     ['array bindings', 'principalOrgBindings', '[]', /at least one principal mapping/],
+    ['non-string organization binding', 'principalOrgBindings', '{"platform@test.example":42}', /organization identifiers must be non-empty strings/],
+    ['empty organization binding', 'principalOrgBindings', '{"platform@test.example":""}', /organization identifiers must be non-empty strings/],
+    ['ambiguous case-folded principal bindings', 'principalOrgBindings', '{"Platform@test.example":"org-a","platform@test.example":"org-b"}', /unique ignoring case/],
+    ['malformed principal binding', 'principalOrgBindings', '{"not-an-email":"org-a"}', /keys must be email addresses/],
     ['empty callers', 'identityCallerPrincipals', '[]', /at least one service principal/],
     ['malformed caller', 'identityCallerPrincipals', '["not-an-email"]', /at least one service principal/],
     ['empty allowed scopes', 'allowedScopes', '[]', /at least one scope/],
