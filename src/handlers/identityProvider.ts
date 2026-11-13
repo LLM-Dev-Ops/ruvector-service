@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { Request, Response } from 'express';
+import { PoolClient } from 'pg';
 import {
   IdentityApiKeyLookupSchema,
   IdentityApiKeyResponseSchema,
@@ -200,6 +201,34 @@ function entitlementInteger(value: number | string, field: string): number {
   return Number(parsed);
 }
 
+async function lockActiveApiKey(
+  client: PoolClient,
+  keyId: string,
+  organizationId: string
+): Promise<ActiveApiKeyRow | undefined> {
+  const locked = await client.query<ActiveApiKeyRow>(
+    `SELECT key_id, key_hash
+       FROM data_plane_api_keys
+      WHERE key_id = $1 AND organization_id = $2
+      FOR SHARE`,
+    [keyId, organizationId]
+  );
+  const key = locked.rows[0];
+  if (!key) return undefined;
+
+  // NOW() is fixed at transaction start. Evaluate activity only after the key
+  // row lock is held so expiry cannot pass while this request waits on a lock.
+  const activity = await client.query<{ is_active: boolean }>(
+    `SELECT is_active = TRUE
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR expires_at > clock_timestamp()) AS is_active
+       FROM data_plane_api_keys
+      WHERE key_id = $1 AND organization_id = $2`,
+    [keyId, organizationId]
+  );
+  return activity.rows[0]?.is_active ? key : undefined;
+}
+
 function lookupRequest(req: Request): { key_hash: string } {
   const parsed = IdentityApiKeyLookupSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -364,18 +393,12 @@ export async function authorizeCliSessionHandler(
       if (session.organization_id !== membership.organization_id || !session.key_id) {
         throw new AppError(409, 'session_already_authorized', 'CLI session belongs to another tenant');
       }
-      const replayedKey = await client.query<{ key_id: string }>(
-        `SELECT key_id
-           FROM data_plane_api_keys
-          WHERE key_id = $1
-            AND organization_id = $2
-            AND is_active = TRUE
-            AND revoked_at IS NULL
-            AND (expires_at IS NULL OR expires_at > NOW())
-          FOR SHARE`,
-        [session.key_id, membership.organization_id]
+      const replayedKey = await lockActiveApiKey(
+        client,
+        session.key_id,
+        membership.organization_id
       );
-      if (!replayedKey.rows[0]) {
+      if (!replayedKey) {
         throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
       }
       await client.query('COMMIT');
@@ -508,19 +531,11 @@ export async function pollCliSessionHandler(
     }
     let activeKey: ActiveApiKeyRow | undefined;
     if (session.encrypted_api_key) {
-      const keyResult = await client.query<ActiveApiKeyRow>(
-        `SELECT key_id, key_hash
-           FROM data_plane_api_keys
-          WHERE key_id = $1 AND organization_id = $2
-            AND is_active = TRUE AND revoked_at IS NULL
-            AND (expires_at IS NULL OR expires_at > NOW())
-          FOR SHARE`,
-        [session.key_id, session.organization_id]
-      );
-      if (!keyResult.rows[0]) {
+      const key = await lockActiveApiKey(client, session.key_id, session.organization_id);
+      if (!key) {
         throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
       }
-      activeKey = keyResult.rows[0];
+      activeKey = key;
     }
     const plaintextKey = session.encrypted_api_key ? decryptApiKey(session.encrypted_api_key) : undefined;
     if (plaintextKey) {

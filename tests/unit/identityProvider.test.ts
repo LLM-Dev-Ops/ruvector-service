@@ -237,6 +237,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
         }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
           key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           key_hash: insertedKeyHash,
@@ -276,6 +277,11 @@ describe('IAM-scoped identity provider', () => {
     const pollExpiryIndex = pollClient.query.mock.calls.findIndex(([sql]) =>
       String(sql).includes('expires_at > clock_timestamp()'));
     expect(pollExpiryIndex).toBeGreaterThan(pollLockIndex);
+    const pollKeyLockIndex = pollClient.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_api_keys[\s\S]*FOR SHARE/.test(String(sql)));
+    const pollKeyActivityIndex = pollClient.query.mock.calls.findIndex(([sql]) =>
+      /expires_at > clock_timestamp\(\)[\s\S]*AS is_active/.test(String(sql)));
+    expect(pollKeyActivityIndex).toBeGreaterThan(pollKeyLockIndex);
     expect(pollClient.query).toHaveBeenCalledWith(expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']);
   });
 
@@ -558,6 +564,7 @@ describe('IAM-scoped identity provider', () => {
           encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
           email: null, payment_status: null, role: null,
         }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
           key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
         }] };
@@ -574,19 +581,21 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
     }));
-    expect(client.query).toHaveBeenCalledWith(
-      expect.stringMatching(/FROM data_plane_api_keys[\s\S]*organization_id = \$2[\s\S]*is_active = TRUE[\s\S]*revoked_at IS NULL[\s\S]*expires_at > NOW\(\)[\s\S]*FOR SHARE/),
-      ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
-    );
+    const replayKeyLockIndex = client.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_api_keys[\s\S]*FOR SHARE/.test(String(sql)));
+    const replayKeyActivityIndex = client.query.mock.calls.findIndex(([sql]) =>
+      /expires_at > clock_timestamp\(\)[\s\S]*AS is_active/.test(String(sql)));
+    expect(replayKeyLockIndex).toBeGreaterThan(-1);
+    expect(replayKeyActivityIndex).toBeGreaterThan(replayKeyLockIndex);
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything());
   });
 
   it.each([
-    ['missing'],
-    ['cross-tenant'],
-    ['revoked'],
-    ['expired'],
-  ])('fails closed when a completed authorization references a %s key', async () => {
+    ['missing', false],
+    ['cross-tenant', false],
+    ['revoked', true],
+    ['expired', true],
+  ])('fails closed when a completed authorization references a %s key', async (_case, keyExists) => {
     const client = {
       query: jest.fn(async (sql: string) => {
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
@@ -599,7 +608,10 @@ describe('IAM-scoped identity provider', () => {
           encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
           email: null, payment_status: null, role: null,
         }] };
-        if (sql.includes('FROM data_plane_api_keys')) return { rows: [] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: false }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: keyExists ? [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'a'.repeat(64),
+        }] : [] };
         return { rows: [] };
       }),
       release: jest.fn(),
@@ -689,6 +701,10 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
         }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: false }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'a'.repeat(64),
+        }] };
         return { rows: [] };
       }),
       release: jest.fn(),
@@ -699,13 +715,13 @@ describe('IAM-scoped identity provider', () => {
       response(), { getClient: jest.fn().mockResolvedValue(client) } as never
     )).rejects.toMatchObject({ statusCode: 410, code: 'session_api_key_inactive' });
 
-    const keyCall = client.query.mock.calls.find(([sql]) =>
-      String(sql).includes('FROM data_plane_api_keys'));
-    const keySql = String(keyCall?.[0]);
-    expect(keySql).toContain('revoked_at IS NULL');
-    expect(keySql).toContain('expires_at IS NULL OR expires_at > NOW()');
-    expect(keySql).toContain('FOR SHARE');
-    expect(keyCall?.[1]).toEqual(['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']);
+    const keyLockIndex = client.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_api_keys[\s\S]*FOR SHARE/.test(String(sql)));
+    const keyActivityIndex = client.query.mock.calls.findIndex(([sql]) =>
+      /expires_at > clock_timestamp\(\)[\s\S]*AS is_active/.test(String(sql)));
+    expect(keyLockIndex).toBeGreaterThan(-1);
+    expect(keyActivityIndex).toBeGreaterThan(keyLockIndex);
+    expect(String(client.query.mock.calls[keyActivityIndex][0])).not.toContain('NOW()');
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
@@ -724,6 +740,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
         }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
           key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'b'.repeat(64),
         }] };
