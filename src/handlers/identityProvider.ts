@@ -19,7 +19,7 @@ interface ApiKeyRow {
   key_id: string;
   organization_id: string;
   name: string;
-  scopes: string[];
+  scopes: unknown;
   created_at: Date | string;
   expires_at: Date | string | null;
   last_used_at: Date | string | null;
@@ -100,6 +100,18 @@ function requestedScopes(scopes: string[] | undefined): string[] {
     throw new AppError(400, 'scope_not_allowed', 'CLI session requested an unsupported scope');
   }
   return [...new Set(selected)];
+}
+
+function activeApiKeyScopes(value: unknown): string[] {
+  const allowed = allowedScopes();
+  if (
+    !Array.isArray(value) ||
+    value.some((scope) => typeof scope !== 'string' || scope.length === 0 || !allowed.has(scope)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new AppError(404, 'api_key_not_found', 'API key is not active');
+  }
+  return value;
 }
 
 function sessionCode(): string {
@@ -204,7 +216,7 @@ export async function lookupApiKeyHandler(
     key_id: row.key_id,
     organization_id: row.organization_id,
     name: row.name,
-    scopes: row.scopes,
+    scopes: activeApiKeyScopes(row.scopes),
     created_at: timestamp(row.created_at),
     expires_at: timestamp(row.expires_at),
     last_used_at: timestamp(row.last_used_at),
