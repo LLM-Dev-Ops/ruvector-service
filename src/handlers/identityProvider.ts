@@ -368,7 +368,7 @@ export async function authorizeCliSessionHandler(
 
     const selected = await client.query<CliSessionRow>(
       `SELECT session_code, status, requested_scopes, organization_id, key_id,
-              encrypted_api_key, expires_at, NULL::text AS email,
+              authorized_issuer, authorized_subject, encrypted_api_key, expires_at, NULL::text AS email,
               NULL::text AS payment_status, NULL::text AS role
          FROM data_plane_cli_sessions
         WHERE session_code = $1
@@ -390,8 +390,11 @@ export async function authorizeCliSessionHandler(
       throw new AppError(410, 'session_expired', 'CLI session has expired');
     }
     if (session.status === 'completed') {
-      if (session.organization_id !== membership.organization_id || !session.key_id) {
-        throw new AppError(409, 'session_already_authorized', 'CLI session belongs to another tenant');
+      if (session.organization_id !== membership.organization_id
+        || session.authorized_issuer !== membership.issuer
+        || session.authorized_subject !== membership.subject
+        || !session.key_id) {
+        throw new AppError(409, 'session_already_authorized', 'CLI session was authorized by another identity');
       }
       const replayedKey = await lockActiveApiKey(
         client,
