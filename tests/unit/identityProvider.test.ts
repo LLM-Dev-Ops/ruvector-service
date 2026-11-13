@@ -496,6 +496,9 @@ describe('IAM-scoped identity provider', () => {
           encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z',
           email: null, payment_status: null, role: null,
         }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+        }] };
         return { rows: [] };
       }),
       release: jest.fn(),
@@ -509,7 +512,45 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
     }));
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM data_plane_api_keys[\s\S]*organization_id = \$2[\s\S]*is_active = TRUE[\s\S]*revoked_at IS NULL[\s\S]*expires_at > NOW\(\)[\s\S]*FOR SHARE/),
+      ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
+    );
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything());
+  });
+
+  it.each([
+    ['missing'],
+    ['cross-tenant'],
+    ['revoked'],
+    ['expired'],
+  ])('fails closed when a completed authorization references a %s key', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z',
+          email: null, payment_status: null, role: null,
+        }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer jwt' },
+    } as unknown as Request, res, { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toMatchObject({ statusCode: 409, code: 'session_key_not_active' });
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it.each([
