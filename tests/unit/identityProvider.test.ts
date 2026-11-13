@@ -106,6 +106,30 @@ describe('IAM-scoped identity provider', () => {
     }));
   });
 
+  it.each([
+    ['retired scope', ['simulation:run', 'tenant:admin']],
+    ['duplicate scope', ['simulation:run', 'simulation:run']],
+    ['malformed persisted scope list', { scope: 'simulation:run' }],
+  ])('fails closed without disclosing a key with a %s', async (_case, scopes) => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{
+      key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+      organization_id: 'org-test',
+      name: 'cli',
+      scopes,
+      created_at: new Date('2026-11-12T00:00:00Z'),
+      expires_at: null,
+      last_used_at: null,
+    }] }) };
+    const res = response();
+
+    await expect(lookupApiKeyHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'api_key_not_found' });
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('creates a bounded CLI session while persisting only a device-code hash', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }) };
     const res = response();
