@@ -53,12 +53,20 @@ interface CliSessionRow {
   requested_scopes: string[];
   organization_id: string | null;
   key_id: string | null;
-  active_key_id: string | null;
+  authorized_issuer: string | null;
+  authorized_subject: string | null;
   encrypted_api_key: string | null;
   expires_at: Date | string;
-  email: string | null;
-  payment_status: 'paid' | 'unpaid' | 'trial' | 'internal' | null;
-  role: 'owner' | null;
+}
+
+interface CliSessionMembershipRow {
+  email: string;
+  payment_status: 'paid' | 'unpaid' | 'trial' | 'internal';
+  role: 'owner';
+}
+
+interface ActiveApiKeyRow {
+  key_id: string;
 }
 
 export type EndUserVerifier = (token: string) => Promise<VerifiedEndUser>;
@@ -391,18 +399,10 @@ export async function pollCliSessionHandler(
     await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
     const selected = await client.query<CliSessionRow>(
       `SELECT s.session_code, s.status, s.requested_scopes, s.organization_id, s.key_id,
-              s.encrypted_api_key, s.expires_at, m.email, m.payment_status, m.role,
-              k.key_id AS active_key_id
+              s.authorized_issuer, s.authorized_subject, s.encrypted_api_key, s.expires_at
          FROM data_plane_cli_sessions s
-         LEFT JOIN data_plane_identity_memberships m
-           ON m.issuer = s.authorized_issuer AND m.subject = s.authorized_subject
-          AND m.organization_id = s.organization_id AND m.is_active = TRUE
-         LEFT JOIN data_plane_api_keys k
-           ON k.key_id = s.key_id AND k.organization_id = s.organization_id
-          AND k.is_active = TRUE AND k.revoked_at IS NULL
-          AND (k.expires_at IS NULL OR k.expires_at > NOW())
         WHERE s.device_code_hash = $1
-        FOR UPDATE OF s`,
+        FOR UPDATE`,
       [sha256(deviceCode)]
     );
     const session = selected.rows[0];
@@ -415,14 +415,35 @@ export async function pollCliSessionHandler(
       res.status(200).json(IdentityCliSessionPollSchema.parse({ status: 'pending' }));
       return;
     }
-    if (!session.organization_id || !session.key_id) {
+    if (!session.organization_id || !session.key_id
+      || !session.authorized_issuer || !session.authorized_subject) {
       throw new AppError(500, 'invalid_session_identity', 'Completed CLI session lacks tenant identity');
     }
-    if (!session.email || !session.payment_status || session.role !== 'owner') {
+    const membershipResult = await client.query<CliSessionMembershipRow>(
+      `SELECT email, payment_status, role
+         FROM data_plane_identity_memberships
+        WHERE issuer = $1 AND subject = $2 AND organization_id = $3
+          AND is_active = TRUE
+        FOR SHARE`,
+      [session.authorized_issuer, session.authorized_subject, session.organization_id]
+    );
+    const membership = membershipResult.rows[0];
+    if (!membership || membership.role !== 'owner') {
       throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
     }
-    if (session.encrypted_api_key && session.active_key_id !== session.key_id) {
-      throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
+    if (session.encrypted_api_key) {
+      const keyResult = await client.query<ActiveApiKeyRow>(
+        `SELECT key_id
+           FROM data_plane_api_keys
+          WHERE key_id = $1 AND organization_id = $2
+            AND is_active = TRUE AND revoked_at IS NULL
+            AND (expires_at IS NULL OR expires_at > NOW())
+          FOR SHARE`,
+        [session.key_id, session.organization_id]
+      );
+      if (!keyResult.rows[0]) {
+        throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
+      }
     }
     const plaintextKey = session.encrypted_api_key ? decryptApiKey(session.encrypted_api_key) : undefined;
     if (plaintextKey) {
@@ -437,10 +458,10 @@ export async function pollCliSessionHandler(
     res.status(200).json(IdentityCliSessionPollSchema.parse({
       status: 'completed',
       ...(plaintextKey ? { api_key: plaintextKey } : {}),
-      email: session.email,
-      payment_status: session.payment_status,
+      email: membership.email,
+      payment_status: membership.payment_status,
       organization_id: session.organization_id,
-      role: session.role,
+      role: membership.role,
     }));
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

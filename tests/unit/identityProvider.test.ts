@@ -152,13 +152,18 @@ describe('IAM-scoped identity provider', () => {
 
     const deviceCode = 'b'.repeat(64);
     const pollClient = {
-      query: jest.fn(async (sql: string) => {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
         if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          active_key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
           encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
         }] };
         return { rows: [] };
       }),
@@ -174,12 +179,20 @@ describe('IAM-scoped identity provider', () => {
     }));
     expect(completed.api_key).toMatch(/^agentics_sk_cli_[a-f0-9]{64}$/);
     expect(insertedKeyHash).toBe(createHash('sha256').update(completed.api_key).digest('hex'));
+    expect(pollClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM data_plane_identity_memberships[\s\S]*FOR SHARE/),
+      ['https://identity.test/auth/v1', 'user-1', 'org-test']
+    );
+    expect(pollClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM data_plane_api_keys[\s\S]*FOR SHARE/),
+      ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
+    );
     expect(pollClient.query).toHaveBeenCalledWith(expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']);
   });
 
   it('rejects authorization scope escalation and missing tenant membership', async () => {
     const makeClient = (membership: boolean) => ({
-      query: jest.fn(async (sql: string) => {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: membership ? [{
           issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
@@ -396,19 +409,19 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
-    ['revoked membership', null, null, null],
-    ['membership moved to another tenant', null, null, null],
-  ])('refuses one-time key delivery after %s', async (_case, email, paymentStatus, role) => {
+    ['revoked membership'],
+    ['membership moved to another tenant'],
+  ])('refuses one-time key delivery after %s', async (_case) => {
     const client = {
-      query: jest.fn(async (sql: string) => sql.includes('FROM data_plane_cli_sessions s')
-        ? { rows: [{
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          active_key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
           encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z',
-          email, payment_status: paymentStatus, role,
-        }] }
-        : { rows: [] }),
+        }] };
+        return { rows: [] };
+      }),
       release: jest.fn(),
     };
 
@@ -417,10 +430,13 @@ describe('IAM-scoped identity provider', () => {
       response(), { getClient: jest.fn().mockResolvedValue(client) } as never
     )).rejects.toMatchObject({ statusCode: 403, code: 'session_membership_inactive' });
 
-    const pollSql = String(client.query.mock.calls.find(([sql]) =>
-      String(sql).includes('FROM data_plane_cli_sessions s'))?.[0]);
-    expect(pollSql).toContain('m.organization_id = s.organization_id');
-    expect(pollSql).toContain('m.is_active = TRUE');
+    const membershipCall = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('FROM data_plane_identity_memberships'));
+    const membershipSql = String(membershipCall?.[0]);
+    expect(membershipSql).toContain('organization_id = $3');
+    expect(membershipSql).toContain('is_active = TRUE');
+    expect(membershipSql).toContain('FOR SHARE');
+    expect(membershipCall?.[1]).toEqual(['https://identity.test/auth/v1', 'user-1', 'org-test']);
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
@@ -428,15 +444,18 @@ describe('IAM-scoped identity provider', () => {
 
   it('refuses delivery after the issued key is revoked or expired', async () => {
     const client = {
-      query: jest.fn(async (sql: string) => sql.includes('FROM data_plane_cli_sessions s')
-        ? { rows: [{
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          active_key_id: null, encrypted_api_key: 'not-decrypted',
-          expires_at: '2030-01-01T00:10:00Z', email: 'owner@example.test',
-          payment_status: 'paid', role: 'owner',
-        }] }
-        : { rows: [] }),
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        return { rows: [] };
+      }),
       release: jest.fn(),
     };
 
@@ -445,10 +464,13 @@ describe('IAM-scoped identity provider', () => {
       response(), { getClient: jest.fn().mockResolvedValue(client) } as never
     )).rejects.toMatchObject({ statusCode: 410, code: 'session_api_key_inactive' });
 
-    const pollSql = String(client.query.mock.calls.find(([sql]) =>
-      String(sql).includes('FROM data_plane_cli_sessions s'))?.[0]);
-    expect(pollSql).toContain('k.revoked_at IS NULL');
-    expect(pollSql).toContain('k.expires_at IS NULL OR k.expires_at > NOW()');
+    const keyCall = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('FROM data_plane_api_keys'));
+    const keySql = String(keyCall?.[0]);
+    expect(keySql).toContain('revoked_at IS NULL');
+    expect(keySql).toContain('expires_at IS NULL OR expires_at > NOW()');
+    expect(keySql).toContain('FOR SHARE');
+    expect(keyCall?.[1]).toEqual(['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']);
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
@@ -459,15 +481,23 @@ describe('IAM-scoped identity provider', () => {
       { status: 'pending', expires_at: '2030-01-01T00:10:00Z' },
       {
         status: 'completed', expires_at: '2030-01-01T00:10:00Z', organization_id: 'org-test',
-        email: 'owner@example.test', payment_status: 'paid', role: 'owner', encrypted_api_key: null,
+        authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+        encrypted_api_key: null,
       },
     ];
     for (const session of sessions) {
       const client = {
-        query: jest.fn(async (sql: string) => sql.includes('FROM data_plane_cli_sessions s')
-          ? { rows: [{ session_code: 'ABCDEFGH', requested_scopes: ['platform:read'], key_id: 'key',
-            organization_id: null, encrypted_api_key: null, email: null, payment_status: null, role: null, ...session }] }
-          : { rows: [] }),
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+            session_code: 'ABCDEFGH', requested_scopes: ['platform:read'], key_id: 'key',
+            organization_id: null, encrypted_api_key: null, authorized_issuer: null,
+            authorized_subject: null, ...session,
+          }] };
+          if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+            email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+          }] };
+          return { rows: [] };
+        }),
         release: jest.fn(),
       };
       const res = response();
