@@ -57,3 +57,15 @@ describe('configuration defaults', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('identity entitlement storage', () => {
+  const databaseClient = readFileSync(join(CLIENTS_DIR, 'DatabaseClient.ts'), 'utf8');
+
+  it('preserves the full safe-integer API-key limit range for new and existing tables', () => {
+    expect(databaseClient).toMatch(/max_api_keys BIGINT NOT NULL/);
+    expect(databaseClient).toMatch(
+      /ALTER TABLE data_plane_identity_organizations[\s\S]*ALTER COLUMN max_api_keys TYPE BIGINT/
+    );
+    expect(databaseClient).not.toMatch(/max_api_keys INTEGER NOT NULL/);
+  });
+});

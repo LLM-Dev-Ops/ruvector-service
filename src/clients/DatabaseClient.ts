@@ -544,10 +544,19 @@ export class DatabaseClient {
           plan VARCHAR(32) NOT NULL CHECK (plan IN ('free', 'developer', 'team', 'enterprise')),
           max_requests BIGINT NOT NULL CHECK (max_requests >= 0),
           max_tokens BIGINT NOT NULL CHECK (max_tokens >= 0),
-          max_api_keys INTEGER NOT NULL CHECK (max_api_keys >= 0),
+          max_api_keys BIGINT NOT NULL CHECK (max_api_keys >= 0),
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+      `);
+
+      // Older provider revisions created max_api_keys as a 32-bit INTEGER even
+      // though the authority permits the full lossless JSON integer range.
+      // Widening INTEGER to BIGINT is lossless and keeps existing deployments
+      // compatible with the authoritative entitlement contract.
+      await this.pool.query(`
+        ALTER TABLE data_plane_identity_organizations
+        ALTER COLUMN max_api_keys TYPE BIGINT
       `);
 
       await this.pool.query(`

@@ -391,6 +391,8 @@ describe('IAM-scoped identity provider', () => {
     const activeKeyCountSql = String(client.query.mock.calls[activeKeyCountIndex][0]);
     expect(activeKeyCountSql).toContain('k.expires_at > clock_timestamp()');
     expect(activeKeyCountSql).not.toContain('k.expires_at > NOW()');
+    expect(activeKeyCountSql).toContain(')::bigint AS active_api_keys');
+    expect(activeKeyCountSql).not.toContain(')::integer AS active_api_keys');
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
