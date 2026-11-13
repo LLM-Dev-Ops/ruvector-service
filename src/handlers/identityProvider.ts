@@ -44,7 +44,7 @@ interface IdentityMembershipRow {
   organization_id: string;
   email: string;
   payment_status: 'paid' | 'unpaid' | 'trial' | 'internal';
-  role: 'owner';
+  role: string;
 }
 
 interface CliSessionRow {
@@ -286,6 +286,9 @@ export async function authorizeCliSessionHandler(
     const membership = membershipResult.rows[0];
     if (!membership) {
       throw new AppError(403, 'identity_membership_required', 'Verified user has no active tenant membership');
+    }
+    if (membership.role !== 'owner') {
+      throw new AppError(403, 'identity_owner_required', 'Only an active tenant owner may authorize CLI API keys');
     }
     if (user.email && user.email !== membership.email.toLowerCase()) {
       throw new AppError(403, 'identity_membership_mismatch', 'Verified user identity does not match tenant membership');
