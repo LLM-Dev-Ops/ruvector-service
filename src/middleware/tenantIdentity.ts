@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { DataPlanePrincipalSchema, type DataPlanePrincipal } from '@llm-dev-ops/contracts';
 import { config } from '../config';
 import { AppError } from './errorHandler';
-import { parsePrincipalOrgBindings } from '../utils/principalBindings';
+import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -61,16 +61,15 @@ function requireIamClaims(req: Request): VerifiedIamClaims {
 }
 
 function identityCallerPrincipals(): Set<string> {
-  let value: unknown;
   try {
-    value = JSON.parse(config.dataPlaneIdentity.identityCallerPrincipals);
-  } catch {
-    throw new AppError(503, 'identity_configuration_error', 'Identity caller principals are not valid JSON');
+    return parseIdentityCallerPrincipals(config.dataPlaneIdentity.identityCallerPrincipals);
+  } catch (error) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      error instanceof Error ? error.message : 'Identity caller principals are invalid'
+    );
   }
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string')) {
-    throw new AppError(503, 'identity_configuration_error', 'Identity caller principals are not configured');
-  }
-  return new Set(value.map((principal) => principal.toLowerCase()));
 }
 
 function principalBindings(): Record<string, string> {

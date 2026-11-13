@@ -17,9 +17,11 @@ function request(payload: Record<string, unknown>): Request {
 
 describe('tenant-bound data-plane identity', () => {
   const originalBindings = config.dataPlaneIdentity.principalOrgBindings;
+  const originalCallers = config.dataPlaneIdentity.identityCallerPrincipals;
 
   afterEach(() => {
     config.dataPlaneIdentity.principalOrgBindings = originalBindings;
+    config.dataPlaneIdentity.identityCallerPrincipals = originalCallers;
   });
 
   it('derives organization scope from the configured IAM principal binding', () => {
@@ -138,5 +140,28 @@ describe('tenant-bound data-plane identity', () => {
       statusCode: 403,
       code: 'identity_caller_not_allowed',
     });
+  });
+
+  it.each([
+    ['case-insensitive duplicate callers', '["Platform@test.example","platform@test.example"]'],
+    ['whitespace-padded callers', '[" platform@test.example"]'],
+    ['malformed callers', '["not-an-email"]'],
+    ['non-string callers', '[42]'],
+  ])('fails closed at request time for %s', (_case, callers) => {
+    config.dataPlaneIdentity.identityCallerPrincipals = callers;
+    const req = request({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireIdentityProviderCaller(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 503,
+      code: 'identity_configuration_error',
+    });
+    expect(req.identityProviderCaller).toBeUndefined();
   });
 });

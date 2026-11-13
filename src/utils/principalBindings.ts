@@ -26,3 +26,33 @@ export function parsePrincipalOrgBindings(value: string): Record<string, string>
   }
   return result;
 }
+
+export function parseIdentityCallerPrincipals(value: string): Set<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('Identity caller principals must be valid JSON');
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('Identity caller principals must contain at least one service principal');
+  }
+
+  const result = new Set<string>();
+  for (const principal of parsed) {
+    if (
+      typeof principal !== 'string' ||
+      principal.trim() !== principal ||
+      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal)
+    ) {
+      throw new Error('Identity caller principals must be email addresses without surrounding whitespace');
+    }
+    const canonicalPrincipal = principal.toLowerCase();
+    if (result.has(canonicalPrincipal)) {
+      throw new Error('Identity caller principals must be unique ignoring case');
+    }
+    result.add(canonicalPrincipal);
+  }
+  return result;
+}

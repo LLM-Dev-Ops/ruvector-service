@@ -7,7 +7,7 @@
 import logger from '../utils/logger';
 import { config, configDeprecations } from '../config';
 import { assertValidDimension } from '../clients/vectorSchema';
-import { parsePrincipalOrgBindings } from '../utils/principalBindings';
+import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
 
 /**
  * Required environment variables for production operation.
@@ -68,18 +68,12 @@ export function assertDataPlaneIdentity(): void {
     throw new Error(`FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS ${detail}.`);
   }
 
-  let identityCallers: unknown;
   try {
-    identityCallers = JSON.parse(config.dataPlaneIdentity.identityCallerPrincipals);
-  } catch {
-    throw new Error('FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS must be valid JSON.');
-  }
-  if (
-    !Array.isArray(identityCallers) ||
-    identityCallers.length === 0 ||
-    identityCallers.some((principal) => typeof principal !== 'string' || !principal.includes('@'))
-  ) {
-    throw new Error('FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS must contain at least one service principal.');
+    parseIdentityCallerPrincipals(config.dataPlaneIdentity.identityCallerPrincipals);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Identity caller principals are invalid';
+    const detail = reason.replace(/^Identity caller principals /, '');
+    throw new Error(`FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS ${detail}.`);
   }
 
   for (const [name, value] of [
