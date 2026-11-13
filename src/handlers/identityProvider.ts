@@ -376,12 +376,11 @@ export async function authorizeCliSessionHandler(
       [membership.organization_id]
     );
     const limit = limitResult.rows[0];
-    const maxApiKeys = Number(limit?.max_api_keys);
-    const activeApiKeys = Number(limit?.active_api_keys);
-    if (!limit || !Number.isInteger(maxApiKeys) || maxApiKeys < 0 ||
-        !Number.isInteger(activeApiKeys) || activeApiKeys < 0) {
+    if (!limit) {
       throw new AppError(500, 'invalid_api_key_entitlement', 'Tenant API key entitlement is invalid');
     }
+    const maxApiKeys = entitlementInteger(limit.max_api_keys, 'max_api_keys');
+    const activeApiKeys = entitlementInteger(limit.active_api_keys, 'active_api_keys');
     if (activeApiKeys >= maxApiKeys) {
       throw new AppError(409, 'api_key_limit_reached', 'Tenant API key limit has been reached');
     }
