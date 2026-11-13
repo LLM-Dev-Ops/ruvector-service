@@ -383,6 +383,14 @@ describe('IAM-scoped identity provider', () => {
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       ['identity-api-keys:org-test']
     );
+    const tenantLockIndex = client.query.mock.calls.reduce((found, [sql], index) =>
+      String(sql).includes('pg_advisory_xact_lock') ? index : found, -1);
+    const activeKeyCountIndex = client.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('FROM data_plane_identity_organizations'));
+    expect(activeKeyCountIndex).toBeGreaterThan(tenantLockIndex);
+    const activeKeyCountSql = String(client.query.mock.calls[activeKeyCountIndex][0]);
+    expect(activeKeyCountSql).toContain('k.expires_at > clock_timestamp()');
+    expect(activeKeyCountSql).not.toContain('k.expires_at > NOW()');
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()

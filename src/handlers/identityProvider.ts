@@ -428,7 +428,7 @@ export async function authorizeCliSessionHandler(
               COUNT(k.key_id) FILTER (
                 WHERE k.is_active = TRUE
                   AND k.revoked_at IS NULL
-                  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+                  AND (k.expires_at IS NULL OR k.expires_at > clock_timestamp())
               )::integer AS active_api_keys
          FROM data_plane_identity_organizations o
          LEFT JOIN data_plane_api_keys k ON k.organization_id = o.organization_id
