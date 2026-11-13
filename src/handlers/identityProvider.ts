@@ -115,6 +115,19 @@ function activeApiKeyScopes(value: unknown): string[] {
   return value;
 }
 
+function storedSessionScopes(value: unknown): string[] {
+  const allowed = allowedScopes();
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((scope) => typeof scope !== 'string' || scope.length === 0 || !allowed.has(scope)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new AppError(500, 'invalid_session_scopes', 'CLI session scope state is invalid');
+  }
+  return value;
+}
+
 function sessionCode(): string {
   const bytes = randomBytes(8);
   return Array.from(bytes, (value) => SESSION_ALPHABET[value % SESSION_ALPHABET.length]).join('');
@@ -349,8 +362,8 @@ export async function authorizeCliSessionHandler(
       return;
     }
 
-    const storedScopes = Array.isArray(session.requested_scopes) ? session.requested_scopes : [];
-    const scopes = parsed.data.scopes?.length ? parsed.data.scopes : storedScopes;
+    const storedScopes = storedSessionScopes(session.requested_scopes);
+    const scopes = parsed.data.scopes ?? storedScopes;
     const allowed = allowedScopes();
     if (scopes.some((scope) => !allowed.has(scope) || !storedScopes.includes(scope))) {
       throw new AppError(400, 'scope_escalation', 'Authorized scopes must be a subset of requested scopes');
