@@ -78,6 +78,7 @@ describe('IAM-scoped identity provider', () => {
   it.each([
     ['max_requests', '9007199254740992'],
     ['max_tokens', '9007199254740992'],
+    ['max_api_keys', '9007199254740992'],
   ])('fails closed instead of rounding an unsafe %s entitlement', async (field, value) => {
     const row = {
       organization_id: 'org-test', plan: 'enterprise', max_requests: '10000',
