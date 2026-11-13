@@ -353,6 +353,20 @@ export async function authorizeCliSessionHandler(
       if (session.organization_id !== membership.organization_id || !session.key_id) {
         throw new AppError(409, 'session_already_authorized', 'CLI session belongs to another tenant');
       }
+      const replayedKey = await client.query<{ key_id: string }>(
+        `SELECT key_id
+           FROM data_plane_api_keys
+          WHERE key_id = $1
+            AND organization_id = $2
+            AND is_active = TRUE
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR expires_at > NOW())
+          FOR SHARE`,
+        [session.key_id, membership.organization_id]
+      );
+      if (!replayedKey.rows[0]) {
+        throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
+      }
       await client.query('COMMIT');
       res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
         success: true,
