@@ -8,6 +8,7 @@ import logger from '../utils/logger';
 import { config, configDeprecations } from '../config';
 import { assertValidDimension } from '../clients/vectorSchema';
 import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
+import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
 
 /**
  * Required environment variables for production operation.
@@ -102,21 +103,14 @@ export function assertDataPlaneIdentity(): void {
     throw new Error('FATAL: RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY must be canonical base64 for exactly 32 bytes.');
   }
 
-  let allowedScopes: unknown;
-  let defaultScopes: unknown;
   try {
-    allowedScopes = JSON.parse(config.dataPlaneIdentity.allowedScopes);
-    defaultScopes = JSON.parse(config.dataPlaneIdentity.defaultScopes);
-  } catch {
-    throw new Error('FATAL: identity scope configuration must be valid JSON.');
-  }
-  if (!Array.isArray(allowedScopes) || allowedScopes.length === 0 ||
-      allowedScopes.some((scope) => typeof scope !== 'string' || scope.length === 0)) {
-    throw new Error('FATAL: RUVVECTOR_IDENTITY_ALLOWED_SCOPES must contain at least one scope.');
-  }
-  if (!Array.isArray(defaultScopes) || defaultScopes.length === 0 ||
-      defaultScopes.some((scope) => typeof scope !== 'string' || !allowedScopes.includes(scope))) {
-    throw new Error('FATAL: RUVVECTOR_IDENTITY_DEFAULT_SCOPES must be a non-empty subset of allowed scopes.');
+    parseIdentityScopeConfiguration(
+      config.dataPlaneIdentity.allowedScopes,
+      config.dataPlaneIdentity.defaultScopes
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Identity scope configuration is invalid';
+    throw new Error(`FATAL: ${reason}.`);
   }
 }
 

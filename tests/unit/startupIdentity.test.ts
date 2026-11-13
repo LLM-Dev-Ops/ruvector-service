@@ -59,9 +59,13 @@ describe('identity provider startup assertions', () => {
     ['whitespace-padded caller', 'identityCallerPrincipals', '[" platform@test.example"]', /without surrounding whitespace/],
     ['ambiguous case-folded callers', 'identityCallerPrincipals', '["Platform@test.example","platform@test.example"]', /unique ignoring case/],
     ['empty allowed scopes', 'allowedScopes', '[]', /at least one scope/],
-    ['non-string allowed scope', 'allowedScopes', '[1]', /at least one scope/],
-    ['empty default scopes', 'defaultScopes', '[]', /non-empty subset/],
-    ['non-string default scope', 'defaultScopes', '[1]', /non-empty subset/],
+    ['non-string allowed scope', 'allowedScopes', '[1]', /non-empty strings/],
+    ['whitespace-padded allowed scope', 'allowedScopes', '[" platform:read"]', /without surrounding whitespace/],
+    ['duplicate allowed scope', 'allowedScopes', '["platform:read","platform:read"]', /must be unique/],
+    ['empty default scopes', 'defaultScopes', '[]', /at least one scope/],
+    ['non-string default scope', 'defaultScopes', '[1]', /non-empty strings/],
+    ['whitespace-padded default scope', 'defaultScopes', '["platform:read "]', /without surrounding whitespace/],
+    ['duplicate default scope', 'defaultScopes', '["platform:read","platform:read"]', /must be unique/],
   ])('rejects %s', (_label, field, value, expected) => {
     (config.dataPlaneIdentity as unknown as Record<string, string>)[field] = value;
     expect(() => assertDataPlaneIdentity()).toThrow(expected);

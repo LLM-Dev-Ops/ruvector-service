@@ -14,6 +14,7 @@ import { DatabaseClient } from '../clients/DatabaseClient';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { VerifiedEndUser, verifyEndUserJwt } from '../utils/identityJwt';
+import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
 
 interface ApiKeyRow {
   key_id: string;
@@ -74,32 +75,33 @@ export type EndUserVerifier = (token: string) => Promise<VerifiedEndUser>;
 
 const SESSION_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-function configuredArray(value: string, name: string): string[] {
-  let parsed: unknown;
+function identityScopeConfiguration(): { allowed: string[]; defaults: string[] } {
   try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new AppError(503, 'identity_configuration_error', `${name} is not valid JSON`);
+    return parseIdentityScopeConfiguration(
+      config.dataPlaneIdentity.allowedScopes,
+      config.dataPlaneIdentity.defaultScopes
+    );
+  } catch (error) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      error instanceof Error ? error.message : 'Identity scope configuration is invalid'
+    );
   }
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== 'string')) {
-    throw new AppError(503, 'identity_configuration_error', `${name} is not configured`);
-  }
-  return parsed;
 }
 
 function allowedScopes(): Set<string> {
-  return new Set(configuredArray(config.dataPlaneIdentity.allowedScopes, 'Identity allowed scopes'));
+  return new Set(identityScopeConfiguration().allowed);
 }
 
 function requestedScopes(scopes: string[] | undefined): string[] {
-  const selected = scopes?.length
-    ? scopes
-    : configuredArray(config.dataPlaneIdentity.defaultScopes, 'Identity default scopes');
-  const allowed = allowedScopes();
+  const configured = identityScopeConfiguration();
+  const selected = scopes?.length ? scopes : configured.defaults;
+  const allowed = new Set(configured.allowed);
   if (selected.some((scope) => !allowed.has(scope))) {
     throw new AppError(400, 'scope_not_allowed', 'CLI session requested an unsupported scope');
   }
-  return [...new Set(selected)];
+  return selected;
 }
 
 function activeApiKeyScopes(value: unknown): string[] {

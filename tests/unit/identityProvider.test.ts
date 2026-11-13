@@ -7,6 +7,7 @@ import {
   lookupEntitlementHandler,
   pollCliSessionHandler,
 } from '../../src/handlers/identityProvider';
+import { config } from '../../src/config';
 
 const keyHash = 'a'.repeat(64);
 
@@ -25,6 +26,14 @@ function response(): Response {
 }
 
 describe('IAM-scoped identity provider', () => {
+  const originalAllowedScopes = config.dataPlaneIdentity.allowedScopes;
+  const originalDefaultScopes = config.dataPlaneIdentity.defaultScopes;
+
+  afterEach(() => {
+    config.dataPlaneIdentity.allowedScopes = originalAllowedScopes;
+    config.dataPlaneIdentity.defaultScopes = originalDefaultScopes;
+  });
+
   it('resolves tenant ownership from an active API-key hash without exposing the hash', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{
       key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
@@ -393,6 +402,24 @@ describe('IAM-scoped identity provider', () => {
       db as never
     )).rejects.toMatchObject({ code: 'validation_error' });
     expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['duplicate allowed scopes', 'allowedScopes', '["platform:read","platform:read"]'],
+    ['whitespace-padded allowed scopes', 'allowedScopes', '[" platform:read"]'],
+    ['duplicate default scopes', 'defaultScopes', '["platform:read","platform:read"]'],
+    ['whitespace-padded default scopes', 'defaultScopes', '["platform:read "]'],
+    ['default scopes outside the allowlist', 'defaultScopes', '["tenant:admin"]'],
+  ])('fails closed at request time for %s', async (_case, field, value) => {
+    (config.dataPlaneIdentity as unknown as Record<string, string>)[field] = value;
+    const db = { query: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: {} } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 503, code: 'identity_configuration_error' });
+    expect(db.query).not.toHaveBeenCalled();
   });
 
   it.each([
