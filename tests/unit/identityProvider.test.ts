@@ -75,6 +75,25 @@ describe('IAM-scoped identity provider', () => {
     });
   });
 
+  it.each([
+    ['max_requests', '9007199254740992'],
+    ['max_tokens', '9007199254740992'],
+  ])('fails closed instead of rounding an unsafe %s entitlement', async (field, value) => {
+    const row = {
+      organization_id: 'org-test', plan: 'enterprise', max_requests: '10000',
+      max_tokens: '1000000', max_api_keys: '10', [field]: value,
+    };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [row] }) };
+    const res = response();
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_entitlement_value' });
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('uses the same non-disclosing response for unknown and inactive keys', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     await expect(lookupApiKeyHandler(
