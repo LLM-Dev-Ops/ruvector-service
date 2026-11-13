@@ -170,7 +170,8 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
           organization_id: null, key_id: null, encrypted_api_key: null,
-          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
         }] };
         if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
           max_api_keys: 10, active_api_keys: 1,
@@ -199,6 +200,10 @@ describe('IAM-scoped identity provider', () => {
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       ['identity-api-keys:org-test']
     );
+    expect(authorizationClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/expires_at > NOW\(\)[\s\S]*AS is_unexpired[\s\S]*FOR UPDATE/),
+      ['ABCDEFGH']
+    );
     expect(encryptedKey).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(encryptedKey).not.toContain('agentics_sk_cli_');
 
@@ -209,7 +214,7 @@ describe('IAM-scoped identity provider', () => {
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
-          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
         }] };
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
@@ -240,6 +245,10 @@ describe('IAM-scoped identity provider', () => {
       expect.stringMatching(/FROM data_plane_api_keys[\s\S]*FOR SHARE/),
       ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
     );
+    expect(pollClient.query).toHaveBeenCalledWith(
+      expect.stringMatching(/s\.expires_at > NOW\(\)[\s\S]*AS is_unexpired[\s\S]*FOR UPDATE/),
+      [createHash('sha256').update(deviceCode).digest('hex')]
+    );
     expect(pollClient.query).toHaveBeenCalledWith(expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']);
   });
 
@@ -253,7 +262,8 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
           organization_id: null, key_id: null, encrypted_api_key: null,
-          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
         }] };
         return { rows: [] };
       }),
@@ -318,7 +328,8 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
           organization_id: null, key_id: null, encrypted_api_key: null,
-          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
         }] };
         if (sql.includes('FROM data_plane_identity_organizations')) {
           return { rows: entitlement ? [entitlement] : [] };
@@ -398,7 +409,8 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'pending', requested_scopes: requestedScopes,
           organization_id: null, key_id: null, encrypted_api_key: null,
-          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
         }] };
         return { rows: [] };
       }),
@@ -447,13 +459,18 @@ describe('IAM-scoped identity provider', () => {
 
   it.each([
     ['email mismatch', {
-      session: { status: 'pending', expires_at: '2030-01-01T00:10:00Z' },
+      session: { status: 'pending', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true },
       userEmail: 'attacker@example.test', code: 'identity_membership_mismatch',
     }],
     ['missing session', { session: null, code: 'session_not_found' }],
-    ['expired session', { session: { status: 'pending', expires_at: '2020-01-01T00:00:00Z' }, code: 'session_expired' }],
+    ['expired session', { session: {
+      status: 'pending', expires_at: '2030-01-01T00:10:00Z', is_unexpired: false,
+    }, code: 'session_expired' }],
     ['completed cross-tenant session', {
-      session: { status: 'completed', organization_id: 'org-other', key_id: 'existing', expires_at: '2030-01-01T00:10:00Z' },
+      session: {
+        status: 'completed', organization_id: 'org-other', key_id: 'existing',
+        expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+      },
       code: 'session_already_authorized',
     }],
   ])('fails closed for %s', async (_case, scenario) => {
@@ -493,7 +510,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
           email: null, payment_status: null, role: null,
         }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
@@ -534,7 +551,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
           email: null, payment_status: null, role: null,
         }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [] };
@@ -556,9 +573,12 @@ describe('IAM-scoped identity provider', () => {
   it.each([
     ['malformed device code', 'short', null, 'validation_error'],
     ['unknown device code', 'c'.repeat(64), null, 'session_not_found'],
-    ['expired session', 'c'.repeat(64), { status: 'pending', expires_at: '2020-01-01T00:00:00Z' }, 'session_expired'],
+    ['expired session', 'c'.repeat(64), {
+      status: 'pending', expires_at: '2030-01-01T00:10:00Z', is_unexpired: false,
+    }, 'session_expired'],
     ['missing completed identity', 'c'.repeat(64), {
-      status: 'completed', expires_at: '2030-01-01T00:10:00Z', organization_id: null,
+      status: 'completed', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+      organization_id: null,
     }, 'invalid_session_identity'],
   ])('rejects polling with %s', async (_case, deviceCode, session, code) => {
     const client = {
@@ -588,7 +608,7 @@ describe('IAM-scoped identity provider', () => {
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
-          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
         }] };
         return { rows: [] };
       }),
@@ -619,7 +639,7 @@ describe('IAM-scoped identity provider', () => {
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
-          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
         }] };
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
@@ -654,7 +674,7 @@ describe('IAM-scoped identity provider', () => {
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
-          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
         }] };
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
@@ -679,9 +699,10 @@ describe('IAM-scoped identity provider', () => {
 
   it('returns pending and redelivered-completed states without exposing a second key', async () => {
     const sessions = [
-      { status: 'pending', expires_at: '2030-01-01T00:10:00Z' },
+      { status: 'pending', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true },
       {
-        status: 'completed', expires_at: '2030-01-01T00:10:00Z', organization_id: 'org-test',
+        status: 'completed', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+        organization_id: 'org-test',
         authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
         encrypted_api_key: null,
       },

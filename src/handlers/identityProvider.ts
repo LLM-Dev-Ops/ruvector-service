@@ -57,6 +57,7 @@ interface CliSessionRow {
   authorized_subject: string | null;
   encrypted_api_key: string | null;
   expires_at: Date | string;
+  is_unexpired: boolean;
 }
 
 interface CliSessionMembershipRow {
@@ -337,7 +338,7 @@ export async function authorizeCliSessionHandler(
 
     const selected = await client.query<CliSessionRow>(
       `SELECT session_code, status, requested_scopes, organization_id, key_id,
-              encrypted_api_key, expires_at, NULL::text AS email,
+              encrypted_api_key, expires_at, (expires_at > NOW()) AS is_unexpired, NULL::text AS email,
               NULL::text AS payment_status, NULL::text AS role
          FROM data_plane_cli_sessions
         WHERE session_code = $1
@@ -346,7 +347,7 @@ export async function authorizeCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
-    if (new Date(session.expires_at).getTime() <= Date.now()) {
+    if (!session.is_unexpired) {
       throw new AppError(410, 'session_expired', 'CLI session has expired');
     }
     if (session.status === 'completed') {
@@ -457,7 +458,8 @@ export async function pollCliSessionHandler(
     await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
     const selected = await client.query<CliSessionRow>(
       `SELECT s.session_code, s.status, s.requested_scopes, s.organization_id, s.key_id,
-              s.authorized_issuer, s.authorized_subject, s.encrypted_api_key, s.expires_at
+              s.authorized_issuer, s.authorized_subject, s.encrypted_api_key, s.expires_at,
+              (s.expires_at > NOW()) AS is_unexpired
          FROM data_plane_cli_sessions s
         WHERE s.device_code_hash = $1
         FOR UPDATE`,
@@ -465,7 +467,7 @@ export async function pollCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
-    if (new Date(session.expires_at).getTime() <= Date.now()) {
+    if (!session.is_unexpired) {
       throw new AppError(410, 'session_expired', 'CLI session has expired');
     }
     if (session.status === 'pending') {
