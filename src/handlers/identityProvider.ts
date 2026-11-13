@@ -33,6 +33,11 @@ interface EntitlementRow {
   max_api_keys: number | string;
 }
 
+interface ApiKeyLimitRow {
+  max_api_keys: number | string;
+  active_api_keys: number | string;
+}
+
 interface IdentityMembershipRow {
   issuer: string;
   subject: string;
@@ -309,6 +314,37 @@ export async function authorizeCliSessionHandler(
     if (scopes.some((scope) => !allowed.has(scope) || !storedScopes.includes(scope))) {
       throw new AppError(400, 'scope_escalation', 'Authorized scopes must be a subset of requested scopes');
     }
+
+    // Serialize key creation per tenant so concurrent CLI sessions cannot each
+    // observe the same available slot and exceed the authoritative entitlement.
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`identity-api-keys:${membership.organization_id}`]
+    );
+    const limitResult = await client.query<ApiKeyLimitRow>(
+      `SELECT o.max_api_keys,
+              COUNT(k.key_id) FILTER (
+                WHERE k.is_active = TRUE
+                  AND k.revoked_at IS NULL
+                  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+              )::integer AS active_api_keys
+         FROM data_plane_identity_organizations o
+         LEFT JOIN data_plane_api_keys k ON k.organization_id = o.organization_id
+        WHERE o.organization_id = $1
+        GROUP BY o.max_api_keys`,
+      [membership.organization_id]
+    );
+    const limit = limitResult.rows[0];
+    const maxApiKeys = Number(limit?.max_api_keys);
+    const activeApiKeys = Number(limit?.active_api_keys);
+    if (!limit || !Number.isInteger(maxApiKeys) || maxApiKeys < 0 ||
+        !Number.isInteger(activeApiKeys) || activeApiKeys < 0) {
+      throw new AppError(500, 'invalid_api_key_entitlement', 'Tenant API key entitlement is invalid');
+    }
+    if (activeApiKeys >= maxApiKeys) {
+      throw new AppError(409, 'api_key_limit_reached', 'Tenant API key limit has been reached');
+    }
+
     const plaintextKey = `agentics_sk_cli_${randomBytes(32).toString('hex')}`;
     const keyId = randomUUID();
     await client.query(

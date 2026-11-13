@@ -120,6 +120,9 @@ describe('IAM-scoped identity provider', () => {
           organization_id: null, key_id: null, encrypted_api_key: null,
           expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
         }] };
+        if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+          max_api_keys: 10, active_api_keys: 1,
+        }] };
         if (sql.includes('INSERT INTO data_plane_api_keys')) insertedKeyHash = String(params?.[4]);
         if (sql.includes('UPDATE data_plane_cli_sessions')) encryptedKey = String(params?.[5]);
         return { rows: [] };
@@ -140,6 +143,10 @@ describe('IAM-scoped identity provider', () => {
       success: true, organization_id: 'org-test', key_id: expect.any(String),
     }));
     expect((authorizeRes.json as jest.Mock).mock.calls[0][0]).not.toHaveProperty('api_key');
+    expect(authorizationClient.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['identity-api-keys:org-test']
+    );
     expect(encryptedKey).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(encryptedKey).not.toContain('agentics_sk_cli_');
 
@@ -199,6 +206,48 @@ describe('IAM-scoped identity provider', () => {
     await expect(authorizeCliSessionHandler(
       request, response(), { getClient: jest.fn().mockResolvedValue(makeClient(false)) } as never, verifier
     )).rejects.toMatchObject({ code: 'identity_membership_required' });
+  });
+
+  it.each([
+    ['at the active key limit', { max_api_keys: 2, active_api_keys: 2 }, 'api_key_limit_reached', 409],
+    ['with a missing entitlement row', null, 'invalid_api_key_entitlement', 500],
+  ])('rejects key creation %s inside the tenant-serialized transaction', async (
+    _case, entitlement, code, statusCode
+  ) => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
+          organization_id: null, key_id: null, encrypted_api_key: null,
+          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+        }] };
+        if (sql.includes('FROM data_plane_identity_organizations')) {
+          return { rows: entitlement ? [entitlement] : [] };
+        }
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: 'owner@example.test' })))
+      .rejects.toMatchObject({ code, statusCode });
+
+    expect(client.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['identity-api-keys:org-test']
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
+    );
   });
 
   it('uses configured default scopes and rejects malformed session input', async () => {
