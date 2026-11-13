@@ -156,6 +156,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
           organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          active_key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
           encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
           email: 'owner@example.test', payment_status: 'paid', role: 'owner',
         }] };
@@ -392,6 +393,65 @@ describe('IAM-scoped identity provider', () => {
       { params: { device_code: deviceCode } } as unknown as Request, response(), db as never
     )).rejects.toMatchObject({ code });
     if (code === 'validation_error') expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['revoked membership', null, null, null],
+    ['membership moved to another tenant', null, null, null],
+  ])('refuses one-time key delivery after %s', async (_case, email, paymentStatus, role) => {
+    const client = {
+      query: jest.fn(async (sql: string) => sql.includes('FROM data_plane_cli_sessions s')
+        ? { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          active_key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          encrypted_api_key: 'not-decrypted', expires_at: '2030-01-01T00:10:00Z',
+          email, payment_status: paymentStatus, role,
+        }] }
+        : { rows: [] }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      response(), { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 403, code: 'session_membership_inactive' });
+
+    const pollSql = String(client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('FROM data_plane_cli_sessions s'))?.[0]);
+    expect(pollSql).toContain('m.organization_id = s.organization_id');
+    expect(pollSql).toContain('m.is_active = TRUE');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+  });
+
+  it('refuses delivery after the issued key is revoked or expired', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => sql.includes('FROM data_plane_cli_sessions s')
+        ? { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          active_key_id: null, encrypted_api_key: 'not-decrypted',
+          expires_at: '2030-01-01T00:10:00Z', email: 'owner@example.test',
+          payment_status: 'paid', role: 'owner',
+        }] }
+        : { rows: [] }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'f'.repeat(64) } } as unknown as Request,
+      response(), { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 410, code: 'session_api_key_inactive' });
+
+    const pollSql = String(client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('FROM data_plane_cli_sessions s'))?.[0]);
+    expect(pollSql).toContain('k.revoked_at IS NULL');
+    expect(pollSql).toContain('k.expires_at IS NULL OR k.expires_at > NOW()');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
   });
 
   it('returns pending and redelivered-completed states without exposing a second key', async () => {
