@@ -106,6 +106,7 @@ function activeApiKeyScopes(value: unknown): string[] {
   const allowed = allowedScopes();
   if (
     !Array.isArray(value) ||
+    value.length === 0 ||
     value.some((scope) => typeof scope !== 'string' || scope.length === 0 || !allowed.has(scope)) ||
     new Set(value).size !== value.length
   ) {
