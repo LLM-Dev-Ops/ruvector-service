@@ -384,6 +384,45 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['empty', []],
+    ['duplicate', ['platform:read', 'platform:read']],
+    ['retired', ['retired:scope']],
+    ['malformed', [1]],
+  ])('rejects %s persisted session scopes before key entitlement or creation', async (_case, requestedScopes) => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'pending', requested_scopes: requestedScopes,
+          organization_id: null, key_id: null, encrypted_api_key: null,
+          expires_at: '2030-01-01T00:10:00Z', email: null, payment_status: null, role: null,
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: 'owner@example.test' })))
+      .rejects.toMatchObject({ statusCode: 500, code: 'invalid_session_scopes' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      ['identity-api-keys:org-test']
+    );
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
+    );
+  });
+
+  it.each([
     ['missing JWT', {}, 'end_user_authentication_required'],
     ['API key in place of JWT', { authorization: 'Bearer agentics_sk_cli_bad' }, 'end_user_jwt_required'],
   ])('rejects %s before opening a transaction', async (_case, headers, code) => {
