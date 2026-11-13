@@ -157,6 +157,21 @@ function timestamp(value: Date | string | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
+function entitlementInteger(value: number | string, field: string): number {
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+    throw new AppError(500, 'invalid_entitlement_value', `${field} is not a safe non-negative integer`);
+  }
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new AppError(500, 'invalid_entitlement_value', `${field} is not a safe non-negative integer`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new AppError(500, 'invalid_entitlement_value', `${field} exceeds the lossless JSON integer range`);
+  }
+  return Number(parsed);
+}
+
 function lookupRequest(req: Request): { key_hash: string } {
   const parsed = IdentityApiKeyLookupSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -219,9 +234,9 @@ export async function lookupEntitlementHandler(
   res.status(200).json(IdentityEntitlementResponseSchema.parse({
     organization_id: row.organization_id,
     plan: row.plan,
-    max_requests: Number(row.max_requests),
-    max_tokens: Number(row.max_tokens),
-    max_api_keys: Number(row.max_api_keys),
+    max_requests: entitlementInteger(row.max_requests, 'max_requests'),
+    max_tokens: entitlementInteger(row.max_tokens, 'max_tokens'),
+    max_api_keys: entitlementInteger(row.max_api_keys, 'max_api_keys'),
   }));
 }
 
