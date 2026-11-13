@@ -303,6 +303,9 @@ describe('IAM-scoped identity provider', () => {
   it.each([
     ['at the active key limit', { max_api_keys: 2, active_api_keys: 2 }, 'api_key_limit_reached', 409],
     ['with a missing entitlement row', null, 'invalid_api_key_entitlement', 500],
+    ['with an unsafe API-key limit', {
+      max_api_keys: '9007199254740992', active_api_keys: '0',
+    }, 'invalid_entitlement_value', 500],
   ])('rejects key creation %s inside the tenant-serialized transaction', async (
     _case, entitlement, code, statusCode
   ) => {
