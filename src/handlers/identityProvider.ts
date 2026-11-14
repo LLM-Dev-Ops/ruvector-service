@@ -70,6 +70,7 @@ interface CliSessionMembershipRow {
 interface ActiveApiKeyRow {
   key_id: string;
   key_hash: string;
+  scopes: unknown;
 }
 
 export type EndUserVerifier = (token: string) => Promise<VerifiedEndUser>;
@@ -105,14 +106,16 @@ function requestedScopes(scopes: string[] | undefined): string[] {
   return selected;
 }
 
-function activeApiKeyScopes(value: unknown): string[] {
+function isCurrentScopeList(value: unknown): value is string[] {
   const allowed = allowedScopes();
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some((scope) => typeof scope !== 'string' || scope.length === 0 || !allowed.has(scope)) ||
-    new Set(value).size !== value.length
-  ) {
+  return Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((scope) => typeof scope === 'string' && scope.length > 0 && allowed.has(scope)) &&
+    new Set(value).size === value.length;
+}
+
+function activeApiKeyScopes(value: unknown): string[] {
+  if (!isCurrentScopeList(value)) {
     throw new AppError(404, 'api_key_not_found', 'API key is not active');
   }
   return value;
@@ -207,14 +210,14 @@ async function lockActiveApiKey(
   organizationId: string
 ): Promise<ActiveApiKeyRow | undefined> {
   const locked = await client.query<ActiveApiKeyRow>(
-    `SELECT key_id, key_hash
+    `SELECT key_id, key_hash, scopes
        FROM data_plane_api_keys
       WHERE key_id = $1 AND organization_id = $2
       FOR SHARE`,
     [keyId, organizationId]
   );
   const key = locked.rows[0];
-  if (!key) return undefined;
+  if (!key || !isCurrentScopeList(key.scopes)) return undefined;
 
   // NOW() is fixed at transaction start. Evaluate activity only after the key
   // row lock is held so expiry cannot pass while this request waits on a lock.
