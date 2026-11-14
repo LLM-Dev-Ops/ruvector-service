@@ -689,13 +689,13 @@ export async function pollCliSessionHandler(
         'Completed CLI session delivery state is inconsistent'
       );
     }
-    let activeKey: ActiveApiKeyRow | undefined;
-    if (session.encrypted_api_key) {
-      const key = await lockActiveApiKey(client, session.key_id, session.organization_id);
-      if (!key) {
-        throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
-      }
-      activeKey = key;
+    // A completed response continues to disclose tenant and membership state
+    // after the one-time key copy is erased. Bind every completed poll to the
+    // referenced active key so revocation, expiry, or scope retirement also
+    // closes that post-delivery metadata path.
+    const activeKey = await lockActiveApiKey(client, session.key_id, session.organization_id);
+    if (!activeKey) {
+      throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
     }
     const plaintextKey = session.encrypted_api_key
       ? decryptApiKey(
