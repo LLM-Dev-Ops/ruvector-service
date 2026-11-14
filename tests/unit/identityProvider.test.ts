@@ -466,6 +466,46 @@ describe('IAM-scoped identity provider', () => {
     );
   });
 
+  it('rolls back before key insertion when the prospective delivery response is invalid', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'not-an-email', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
+          organization_id: null, key_id: null, encrypted_api_key: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
+        }] };
+        if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+          max_api_keys: 10, active_api_keys: 1,
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, res, { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toBeDefined();
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE data_plane_cli_sessions'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('uses configured default scopes and rejects malformed session input', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }) };
     await createCliSessionHandler({ body: {} } as Request, response(), db as never);

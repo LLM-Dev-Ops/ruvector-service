@@ -443,12 +443,13 @@ export async function authorizeCliSessionHandler(
       if (!replayedKey) {
         throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
       }
-      await client.query('COMMIT');
-      res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
+      const replayResponse = IdentityCliSessionAuthorizedSchema.parse({
         success: true,
         organization_id: membership.organization_id,
         key_id: replayKeyId,
-      }));
+      });
+      await client.query('COMMIT');
+      res.status(200).json(replayResponse);
       return;
     }
 
@@ -490,6 +491,22 @@ export async function authorizeCliSessionHandler(
 
     const plaintextKey = `agentics_sk_cli_${randomBytes(32).toString('hex')}`;
     const keyId = randomUUID();
+    const authorizedResponse = IdentityCliSessionAuthorizedSchema.parse({
+      success: true,
+      organization_id: membership.organization_id,
+      key_id: keyId,
+    });
+    // Prove that the locked membership and generated key can form the future
+    // one-time delivery response before either durable row is mutated. A bad
+    // persisted membership must roll back without creating an unusable key.
+    IdentityCliSessionPollSchema.parse({
+      status: 'completed',
+      api_key: plaintextKey,
+      email: membership.email,
+      payment_status: membership.payment_status,
+      organization_id: membership.organization_id,
+      role: membership.role,
+    });
     await client.query(
       `INSERT INTO data_plane_api_keys
          (key_id, organization_id, name, scopes, key_hash, is_active)
@@ -506,11 +523,7 @@ export async function authorizeCliSessionHandler(
         keyId, encryptApiKey(plaintextKey, routeCode, membership.organization_id, keyId)]
     );
     await client.query('COMMIT');
-    res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
-      success: true,
-      organization_id: membership.organization_id,
-      key_id: keyId,
-    }));
+    res.status(200).json(authorizedResponse);
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
