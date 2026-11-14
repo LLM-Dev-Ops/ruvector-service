@@ -253,6 +253,18 @@ async function lockActiveApiKey(
   return activity.rows[0]?.is_active ? key : undefined;
 }
 
+async function assertCliSessionUnexpired(client: PoolClient, sessionCode: string): Promise<void> {
+  const expiry = await client.query<{ is_unexpired: boolean }>(
+    `SELECT s.expires_at > clock_timestamp() AS is_unexpired
+       FROM data_plane_cli_sessions s
+      WHERE s.session_code = $1`,
+    [sessionCode]
+  );
+  if (!expiry.rows[0]?.is_unexpired) {
+    throw new AppError(410, 'session_expired', 'CLI session has expired');
+  }
+}
+
 function lookupRequest(req: Request): { key_hash: string } {
   const parsed = IdentityApiKeyLookupSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -425,15 +437,7 @@ export async function authorizeCliSessionHandler(
     // NOW() is fixed at transaction start in PostgreSQL. Re-read expiry from
     // the persistence wall clock only after the session row lock is held so a
     // waiter cannot authorize a session that expired while it was blocked.
-    const expiry = await client.query<{ is_unexpired: boolean }>(
-      `SELECT s.expires_at > clock_timestamp() AS is_unexpired
-         FROM data_plane_cli_sessions s
-        WHERE s.session_code = $1`,
-      [routeCode]
-    );
-    if (!expiry.rows[0]?.is_unexpired) {
-      throw new AppError(410, 'session_expired', 'CLI session has expired');
-    }
+    await assertCliSessionUnexpired(client, routeCode);
     if (replayKeyId) {
       const replayedKey = await lockActiveApiKey(
         client,
@@ -443,6 +447,7 @@ export async function authorizeCliSessionHandler(
       if (!replayedKey) {
         throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
       }
+      await assertCliSessionUnexpired(client, routeCode);
       const replayResponse = IdentityCliSessionAuthorizedSchema.parse({
         success: true,
         organization_id: membership.organization_id,
@@ -488,6 +493,11 @@ export async function authorizeCliSessionHandler(
     if (activeApiKeys >= maxApiKeys) {
       throw new AppError(409, 'api_key_limit_reached', 'Tenant API key limit has been reached');
     }
+
+    // Tenant serialization and entitlement reads can outlive the first expiry
+    // check. Re-evaluate with the database wall clock after those waits and
+    // immediately before any API-key or session mutation.
+    await assertCliSessionUnexpired(client, routeCode);
 
     const plaintextKey = `agentics_sk_cli_${randomBytes(32).toString('hex')}`;
     const keyId = randomUUID();
@@ -554,15 +564,7 @@ export async function pollCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
-    const expiry = await client.query<{ is_unexpired: boolean }>(
-      `SELECT s.expires_at > clock_timestamp() AS is_unexpired
-         FROM data_plane_cli_sessions s
-        WHERE s.session_code = $1`,
-      [session.session_code]
-    );
-    if (!expiry.rows[0]?.is_unexpired) {
-      throw new AppError(410, 'session_expired', 'CLI session has expired');
-    }
+    await assertCliSessionUnexpired(client, session.session_code);
     if (session.status === 'pending') {
       await client.query('COMMIT');
       res.status(200).json(IdentityCliSessionPollSchema.parse({ status: 'pending' }));
@@ -611,6 +613,10 @@ export async function pollCliSessionHandler(
         );
       }
     }
+    // Membership and key locks may block past the session deadline. The final
+    // check prevents an expired session from disclosing plaintext or erasing
+    // the only encrypted delivery copy.
+    await assertCliSessionUnexpired(client, session.session_code);
     const completedResponse = IdentityCliSessionPollSchema.parse({
       status: 'completed',
       ...(plaintextKey ? { api_key: plaintextKey } : {}),
