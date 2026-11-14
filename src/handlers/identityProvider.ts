@@ -152,19 +152,39 @@ function encryptionKey(): Buffer {
   return key;
 }
 
-function encryptApiKey(value: string): string {
+function deliveryBinding(sessionCode: string, organizationId: string, keyId: string): Buffer {
+  return Buffer.from(JSON.stringify({
+    key_id: keyId,
+    organization_id: organizationId,
+    session_code: sessionCode,
+  }), 'utf8');
+}
+
+function encryptApiKey(
+  value: string,
+  sessionCode: string,
+  organizationId: string,
+  keyId: string
+): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  cipher.setAAD(deliveryBinding(sessionCode, organizationId, keyId));
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url')).join('.');
 }
 
-function decryptApiKey(value: string): string {
+function decryptApiKey(
+  value: string,
+  sessionCode: string,
+  organizationId: string,
+  keyId: string
+): string {
   const parts = value.split('.').map((part) => Buffer.from(part, 'base64url'));
   if (parts.length !== 3 || parts[0].length !== 12 || parts[1].length !== 16) {
     throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope is invalid');
   }
   const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), parts[0]);
+  decipher.setAAD(deliveryBinding(sessionCode, organizationId, keyId));
   decipher.setAuthTag(parts[1]);
   try {
     return Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString('utf8');
@@ -476,7 +496,7 @@ export async function authorizeCliSessionHandler(
               organization_id = $4, key_id = $5, encrypted_api_key = $6, completed_at = NOW()
         WHERE session_code = $1`,
       [routeCode, membership.issuer, membership.subject, membership.organization_id,
-        keyId, encryptApiKey(plaintextKey)]
+        keyId, encryptApiKey(plaintextKey, routeCode, membership.organization_id, keyId)]
     );
     await client.query('COMMIT');
     res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
@@ -552,7 +572,14 @@ export async function pollCliSessionHandler(
       }
       activeKey = key;
     }
-    const plaintextKey = session.encrypted_api_key ? decryptApiKey(session.encrypted_api_key) : undefined;
+    const plaintextKey = session.encrypted_api_key
+      ? decryptApiKey(
+        session.encrypted_api_key,
+        session.session_code,
+        session.organization_id,
+        session.key_id
+      )
+      : undefined;
     if (plaintextKey) {
       const plaintextHash = sha256(plaintextKey);
       if (!activeKey || !/^[a-f0-9]{64}$/.test(activeKey.key_hash) ||

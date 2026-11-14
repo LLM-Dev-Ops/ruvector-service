@@ -11,9 +11,23 @@ import { config } from '../../src/config';
 
 const keyHash = 'a'.repeat(64);
 
-function encryptedDelivery(value: string): string {
+function deliveryBinding(sessionCode: string, organizationId: string, keyId: string): Buffer {
+  return Buffer.from(JSON.stringify({
+    key_id: keyId,
+    organization_id: organizationId,
+    session_code: sessionCode,
+  }), 'utf8');
+}
+
+function encryptedDelivery(
+  value: string,
+  sessionCode = 'ABCDEFGH',
+  organizationId = 'org-test',
+  keyId = 'c433a3fa-1d07-4e56-bf30-b9019c7f1415'
+): string {
   const iv = Buffer.alloc(12, 3);
   const cipher = createCipheriv('aes-256-gcm', Buffer.alloc(32, 7), iv);
+  cipher.setAAD(deliveryBinding(sessionCode, organizationId, keyId));
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url')).join('.');
 }
@@ -224,6 +238,7 @@ describe('IAM-scoped identity provider', () => {
     expect(authorizeRes.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true, organization_id: 'org-test', key_id: expect.any(String),
     }));
+    const issuedKeyId = String((authorizeRes.json as jest.Mock).mock.calls[0][0].key_id);
     expect((authorizeRes.json as jest.Mock).mock.calls[0][0]).not.toHaveProperty('api_key');
     expect(authorizationClient.query).toHaveBeenCalledWith(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
@@ -250,7 +265,7 @@ describe('IAM-scoped identity provider', () => {
       query: jest.fn(async (sql: string, _params?: unknown[]) => {
         if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
           session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
-          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          organization_id: 'org-test', key_id: issuedKeyId,
           authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
           encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
         }] };
@@ -259,7 +274,7 @@ describe('IAM-scoped identity provider', () => {
         }] };
         if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
-          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          key_id: issuedKeyId,
           key_hash: insertedKeyHash,
           scopes: ['platform:read'],
         }] };
@@ -283,7 +298,7 @@ describe('IAM-scoped identity provider', () => {
     );
     expect(pollClient.query).toHaveBeenCalledWith(
       expect.stringMatching(/FROM data_plane_api_keys[\s\S]*FOR SHARE/),
-      ['c433a3fa-1d07-4e56-bf30-b9019c7f1415', 'org-test']
+      [issuedKeyId, 'org-test']
     );
     expect(pollClient.query).toHaveBeenCalledWith(
       expect.stringMatching(/FROM data_plane_cli_sessions s[\s\S]*FOR UPDATE/),
@@ -902,6 +917,45 @@ describe('IAM-scoped identity provider', () => {
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
+  });
+
+  it('refuses a delivery envelope moved from another completed session', async () => {
+    const plaintextKey = `agentics_sk_cli_${'2'.repeat(64)}`;
+    const movedKeyId = 'd544b40b-2e18-4f67-9c41-ca12ad8f2526';
+    const encryptedKey = encryptedDelivery(plaintextKey, 'OTHER123', 'org-test', movedKeyId);
+    const res = response();
+    const client = {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: movedKeyId,
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: movedKeyId,
+          key_hash: createHash('sha256').update(plaintextKey).digest('hex'),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'b'.repeat(64) } } as unknown as Request,
+      res, { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_encrypted_session_key' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it('returns pending and redelivered-completed states without exposing a second key', async () => {
