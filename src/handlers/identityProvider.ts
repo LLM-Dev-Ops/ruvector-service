@@ -393,13 +393,23 @@ export async function createCliSessionHandler(
   const client = await db.getClient();
   try {
     await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-    const inserted = await client.query<{ expires_at: Date | string }>(
+    await client.query(
       `INSERT INTO data_plane_cli_sessions
          (session_code, device_code_hash, cli_name, cli_version, hostname, requested_scopes, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,NOW() + INTERVAL '10 minutes')
-       RETURNING expires_at`,
+       VALUES ($1,$2,$3,$4,$5,$6,clock_timestamp() + INTERVAL '10 minutes')`,
       [code, sha256(deviceCode), parsed.data.cli_name ?? null, parsed.data.cli_version ?? null,
         parsed.data.hostname ?? null, JSON.stringify(scopes)]
+    );
+    // Unique-index and trigger work during INSERT can block after the original
+    // expiry expression was evaluated. Refresh the lifetime only after those
+    // storage constraints have been acquired so the response cannot advertise
+    // a fresh ten-minute session whose persisted expiry is already stale.
+    const refreshed = await client.query<{ expires_at: Date | string }>(
+      `UPDATE data_plane_cli_sessions
+          SET expires_at = clock_timestamp() + INTERVAL '10 minutes'
+        WHERE session_code = $1
+        RETURNING expires_at`,
+      [code]
     );
     const verification = new URL(config.dataPlaneIdentity.verificationUrl);
     verification.searchParams.set('code', code);
@@ -407,10 +417,13 @@ export async function createCliSessionHandler(
       session_code: code,
       device_code: deviceCode,
       verification_url: verification.toString(),
-      expires_at: timestamp(inserted.rows[0].expires_at),
+      expires_at: timestamp(refreshed.rows[0].expires_at),
       expires_in_seconds: 600,
       poll_interval_seconds: 5,
     });
+    // Response construction and validation must not outlive the refreshed
+    // persistence deadline. Roll back the provisional session if they do.
+    await assertCliSessionUnexpired(client, code);
     await client.query('COMMIT');
     res.status(201).json(response);
   } catch (error) {

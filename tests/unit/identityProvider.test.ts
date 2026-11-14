@@ -260,9 +260,15 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('creates a bounded CLI session while persisting only a device-code hash', async () => {
-    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
-      ? { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }
-      : { rows: [] });
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('UPDATE data_plane_cli_sessions')) {
+        return { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] };
+      }
+      if (sql.includes('expires_at > clock_timestamp()')) {
+        return { rows: [{ is_unexpired: true }] };
+      }
+      return { rows: [] };
+    });
     const res = response();
     await createCliSessionHandler({ body: {
       cli_name: 'agentics-cli', scopes: ['platform:read'],
@@ -276,13 +282,23 @@ describe('IAM-scoped identity provider', () => {
       String(sql).includes('INSERT INTO data_plane_cli_sessions'));
     expect(insertCall?.[1][1]).toBe(createHash('sha256').update(created.device_code).digest('hex'));
     expect(insertCall?.[1]).not.toContain(created.device_code);
+    const insertIndex = client.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('INSERT INTO data_plane_cli_sessions'));
+    const refreshIndex = client.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('UPDATE data_plane_cli_sessions'));
+    const expiryIndex = client.query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('expires_at > clock_timestamp()'));
+    const commitIndex = client.query.mock.calls.findIndex(([sql]) => sql === 'COMMIT');
+    expect(refreshIndex).toBeGreaterThan(insertIndex);
+    expect(expiryIndex).toBeGreaterThan(refreshIndex);
+    expect(commitIndex).toBeGreaterThan(expiryIndex);
     expect(client.query).toHaveBeenCalledWith('BEGIN ISOLATION LEVEL SERIALIZABLE');
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(client.release).toHaveBeenCalled();
   });
 
   it('rolls back a provisional CLI session when the create response is invalid', async () => {
-    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
+    const { db, client } = transactionalDb(async (sql) => sql.includes('UPDATE data_plane_cli_sessions')
       ? { rows: [{ expires_at: 'not-a-timestamp' }] }
       : { rows: [] });
     const res = response();
@@ -294,6 +310,29 @@ describe('IAM-scoped identity provider', () => {
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(client.query).not.toHaveBeenCalledWith('COMMIT');
     expect(client.release).toHaveBeenCalled();
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a provisional CLI session that expires after response validation', async () => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('UPDATE data_plane_cli_sessions')) {
+        return { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] };
+      }
+      if (sql.includes('expires_at > clock_timestamp()')) {
+        return { rows: [{ is_unexpired: false }] };
+      }
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(createCliSessionHandler({ body: {
+      cli_name: 'agentics-cli', scopes: ['platform:read'],
+    } } as Request, res, db as never)).rejects.toMatchObject({
+      statusCode: 410, code: 'session_expired',
+    });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
     expect(res.json).not.toHaveBeenCalled();
   });
 
@@ -706,9 +745,15 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('uses configured default scopes and rejects malformed session input', async () => {
-    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
-      ? { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }
-      : { rows: [] });
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('UPDATE data_plane_cli_sessions')) {
+        return { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] };
+      }
+      if (sql.includes('expires_at > clock_timestamp()')) {
+        return { rows: [{ is_unexpired: true }] };
+      }
+      return { rows: [] };
+    });
     await createCliSessionHandler({ body: {} } as Request, response(), db as never);
     const insertCall = client.query.mock.calls.find(([sql]) =>
       String(sql).includes('INSERT INTO data_plane_cli_sessions'));
