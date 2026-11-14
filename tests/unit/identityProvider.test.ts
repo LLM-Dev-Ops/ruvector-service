@@ -39,6 +39,13 @@ function response(): Response {
   } as unknown as Response;
 }
 
+function transactionalDb(
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>
+): { db: { getClient: jest.Mock }; client: { query: jest.Mock; release: jest.Mock } } {
+  const client = { query: jest.fn(query), release: jest.fn() };
+  return { db: { getClient: jest.fn().mockResolvedValue(client) }, client };
+}
+
 describe('IAM-scoped identity provider', () => {
   const originalAllowedScopes = config.dataPlaneIdentity.allowedScopes;
   const originalDefaultScopes = config.dataPlaneIdentity.defaultScopes;
@@ -49,20 +56,21 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('resolves tenant ownership from an active API-key hash without exposing the hash', async () => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{
-      key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-      organization_id: 'org-test',
-      name: 'cli',
-      scopes: ['simulation:run'],
-      created_at: new Date('2026-11-12T00:00:00Z'),
-      expires_at: null,
-      last_used_at: null,
-    }] }) };
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+        organization_id: 'org-test', name: 'cli', scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'), expires_at: null, last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      return { rows: [] };
+    });
     const res = response();
 
     await lookupApiKeyHandler({ body: { key_hash: keyHash } } as Request, res, db as never);
 
-    expect(db.query).toHaveBeenCalledWith(expect.stringContaining('key_hash = $1'), [keyHash]);
+    expect(client.query).toHaveBeenCalledWith(expect.stringMatching(/key_hash = \$1[\s\S]*FOR SHARE/), [keyHash]);
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith({
       key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
       organization_id: 'org-test', name: 'cli', scopes: ['simulation:run'],
@@ -75,23 +83,32 @@ describe('IAM-scoped identity provider', () => {
     ['raw API key', { api_key: 'ag_live_secret' }],
     ['caller organization', { key_hash: keyHash, organization_id: 'attacker-org' }],
   ])('rejects %s before querying persistence', async (_case, body) => {
-    const db = { query: jest.fn() };
+    const db = { getClient: jest.fn() };
     await expect(lookupApiKeyHandler({ body } as Request, response(), db as never))
       .rejects.toMatchObject({ statusCode: 400, code: 'validation_error' });
-    expect(db.query).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
   });
 
   it('returns the entitlement bound to the same active key hash', async () => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{
-      organization_id: 'org-test', plan: 'developer', max_requests: '10000',
-      max_tokens: '1000000', max_api_keys: '10', scopes: ['simulation:run'],
-    }] }) };
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        scopes: ['simulation:run'],
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        organization_id: 'org-test', plan: 'developer', max_requests: '10000',
+        max_tokens: '1000000', max_api_keys: '10',
+      }] };
+      return { rows: [] };
+    });
     const res = response();
 
     await lookupEntitlementHandler({ body: { key_hash: keyHash } } as Request, res, db as never);
 
-    expect(db.query.mock.calls[0][0]).toContain('data_plane_identity_lookup');
-    expect(db.query.mock.calls[0][1]).toEqual([keyHash]);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM data_plane_identity_organizations[\s\S]*FOR SHARE/), ['org-test']
+    );
     expect(res.json).toHaveBeenCalledWith({
       organization_id: 'org-test', plan: 'developer', max_requests: 10000,
       max_tokens: 1000000, max_api_keys: 10,
@@ -105,9 +122,17 @@ describe('IAM-scoped identity provider', () => {
   ])('fails closed instead of rounding an unsafe %s entitlement', async (field, value) => {
     const row = {
       organization_id: 'org-test', plan: 'enterprise', max_requests: '10000',
-      max_tokens: '1000000', max_api_keys: '10', scopes: ['simulation:run'], [field]: value,
+      max_tokens: '1000000', max_api_keys: '10', [field]: value,
     };
-    const db = { query: jest.fn().mockResolvedValue({ rows: [row] }) };
+    const { db } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        scopes: ['simulation:run'],
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [row] };
+      return { rows: [] };
+    });
     const res = response();
 
     await expect(lookupEntitlementHandler(
@@ -124,10 +149,12 @@ describe('IAM-scoped identity provider', () => {
     ['empty scope list', []],
     ['malformed persisted scope list', { scope: 'simulation:run' }],
   ])('fails closed without resolving entitlements for a key with a %s', async (_case, scopes) => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{
-      organization_id: 'org-test', plan: 'developer', max_requests: '10000',
-      max_tokens: '1000000', max_api_keys: '10', scopes,
-    }] }) };
+    const { db } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test', scopes,
+      }] };
+      return { rows: [] };
+    });
     const res = response();
 
     await expect(lookupEntitlementHandler(
@@ -139,7 +166,7 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('uses the same non-disclosing response for unknown and inactive keys', async () => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const { db } = transactionalDb(async () => ({ rows: [] }));
     await expect(lookupApiKeyHandler(
       { body: { key_hash: keyHash } } as Request,
       response(),
@@ -156,15 +183,14 @@ describe('IAM-scoped identity provider', () => {
     ['empty scope list', []],
     ['malformed persisted scope list', { scope: 'simulation:run' }],
   ])('fails closed without disclosing a key with a %s', async (_case, scopes) => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{
-      key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-      organization_id: 'org-test',
-      name: 'cli',
-      scopes,
-      created_at: new Date('2026-11-12T00:00:00Z'),
-      expires_at: null,
-      last_used_at: null,
-    }] }) };
+    const { db } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        name: 'cli', scopes, created_at: new Date('2026-11-12T00:00:00Z'),
+        expires_at: null, last_used_at: null,
+      }] };
+      return { rows: [] };
+    });
     const res = response();
 
     await expect(lookupApiKeyHandler(
@@ -172,6 +198,64 @@ describe('IAM-scoped identity provider', () => {
       res,
       db as never
     )).rejects.toMatchObject({ statusCode: 404, code: 'api_key_not_found' });
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an API key expires after response validation but before commit', async () => {
+    let activityChecks = 0;
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        name: 'cli', scopes: ['simulation:run'], created_at: '2026-11-12T00:00:00Z',
+        expires_at: '2030-01-01T00:00:00Z', last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) {
+        activityChecks += 1;
+        return { rows: [{ is_active: activityChecks === 1 }] };
+      }
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupApiKeyHandler(
+      { body: { key_hash: keyHash } } as Request, res, db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'api_key_not_found' });
+
+    expect(activityChecks).toBe(2);
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an entitlement key expires after response validation but before commit', async () => {
+    let activityChecks = 0;
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        scopes: ['simulation:run'],
+      }] };
+      if (sql.includes('AS is_active')) {
+        activityChecks += 1;
+        return { rows: [{ is_active: activityChecks === 1 }] };
+      }
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        organization_id: 'org-test', plan: 'developer', max_requests: '10000',
+        max_tokens: '1000000', max_api_keys: '10',
+      }] };
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request, res, db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'entitlement_not_found' });
+
+    expect(activityChecks).toBe(2);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/FROM data_plane_identity_organizations[\s\S]*FOR SHARE/), ['org-test']
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
     expect(res.json).not.toHaveBeenCalled();
   });
 

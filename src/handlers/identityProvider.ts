@@ -33,7 +33,6 @@ interface EntitlementRow {
   max_requests: number | string;
   max_tokens: number | string;
   max_api_keys: number | string;
-  scopes: unknown;
 }
 
 interface ApiKeyLimitRow {
@@ -240,6 +239,15 @@ async function lockActiveApiKey(
   const key = locked.rows[0];
   if (!key || !isCurrentScopeList(key.scopes)) return undefined;
 
+  return await isLockedApiKeyActive(client, keyId, organizationId) ? key : undefined;
+}
+
+async function isLockedApiKeyActive(
+  client: PoolClient,
+  keyId: string,
+  organizationId: string
+): Promise<boolean> {
+
   // NOW() is fixed at transaction start. Evaluate activity only after the key
   // row lock is held so expiry cannot pass while this request waits on a lock.
   const activity = await client.query<{ is_active: boolean }>(
@@ -250,7 +258,23 @@ async function lockActiveApiKey(
       WHERE key_id = $1 AND organization_id = $2`,
     [keyId, organizationId]
   );
-  return activity.rows[0]?.is_active ? key : undefined;
+  return activity.rows[0]?.is_active === true;
+}
+
+async function lockActiveApiKeyByHash(
+  client: PoolClient,
+  keyHash: string
+): Promise<ApiKeyRow | undefined> {
+  const locked = await client.query<ApiKeyRow>(
+    `SELECT key_id, organization_id, name, scopes, created_at, expires_at, last_used_at
+       FROM data_plane_api_keys
+      WHERE key_hash = $1
+      FOR SHARE`,
+    [keyHash]
+  );
+  const key = locked.rows[0];
+  if (!key || !isCurrentScopeList(key.scopes)) return undefined;
+  return await isLockedApiKeyActive(client, key.key_id, key.organization_id) ? key : undefined;
 }
 
 async function assertCliSessionUnexpired(client: PoolClient, sessionCode: string): Promise<void> {
@@ -279,29 +303,34 @@ export async function lookupApiKeyHandler(
   db: DatabaseClient
 ): Promise<void> {
   const input = lookupRequest(req);
-  const result = await db.query<ApiKeyRow>(
-    `SELECT key_id, organization_id, name, scopes, created_at, expires_at, last_used_at
-       FROM data_plane_api_keys
-      WHERE key_hash = $1
-        AND is_active = TRUE
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > NOW())`,
-    [input.key_hash]
-  );
-  const row = result.rows[0];
-  if (!row) {
-    throw new AppError(404, 'api_key_not_found', 'API key is not active');
-  }
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    const row = await lockActiveApiKeyByHash(client, input.key_hash);
+    if (!row) {
+      throw new AppError(404, 'api_key_not_found', 'API key is not active');
+    }
 
-  res.status(200).json(IdentityApiKeyResponseSchema.parse({
-    key_id: row.key_id,
-    organization_id: row.organization_id,
-    name: row.name,
-    scopes: activeApiKeyScopes(row.scopes),
-    created_at: timestamp(row.created_at),
-    expires_at: timestamp(row.expires_at),
-    last_used_at: timestamp(row.last_used_at),
-  }));
+    const response = IdentityApiKeyResponseSchema.parse({
+      key_id: row.key_id,
+      organization_id: row.organization_id,
+      name: row.name,
+      scopes: activeApiKeyScopes(row.scopes),
+      created_at: timestamp(row.created_at),
+      expires_at: timestamp(row.expires_at),
+      last_used_at: timestamp(row.last_used_at),
+    });
+    if (!await isLockedApiKeyActive(client, row.key_id, row.organization_id)) {
+      throw new AppError(404, 'api_key_not_found', 'API key is not active');
+    }
+    await client.query('COMMIT');
+    res.status(200).json(response);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function lookupEntitlementHandler(
@@ -310,27 +339,43 @@ export async function lookupEntitlementHandler(
   db: DatabaseClient
 ): Promise<void> {
   const input = lookupRequest(req);
-  const result = await db.query<EntitlementRow>(
-    `SELECT organization_id, plan, max_requests, max_tokens, max_api_keys, scopes
-       FROM data_plane_identity_lookup
-      WHERE key_hash = $1
-        AND is_active = TRUE
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > NOW())`,
-    [input.key_hash]
-  );
-  const row = result.rows[0];
-  if (!row || !isCurrentScopeList(row.scopes)) {
-    throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
-  }
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    const key = await lockActiveApiKeyByHash(client, input.key_hash);
+    if (!key) {
+      throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
+    }
+    const result = await client.query<EntitlementRow>(
+    `SELECT organization_id, plan, max_requests, max_tokens, max_api_keys
+       FROM data_plane_identity_organizations
+      WHERE organization_id = $1
+      FOR SHARE`,
+      [key.organization_id]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
+    }
 
-  res.status(200).json(IdentityEntitlementResponseSchema.parse({
-    organization_id: row.organization_id,
-    plan: row.plan,
-    max_requests: entitlementInteger(row.max_requests, 'max_requests'),
-    max_tokens: entitlementInteger(row.max_tokens, 'max_tokens'),
-    max_api_keys: entitlementInteger(row.max_api_keys, 'max_api_keys'),
-  }));
+    const response = IdentityEntitlementResponseSchema.parse({
+      organization_id: row.organization_id,
+      plan: row.plan,
+      max_requests: entitlementInteger(row.max_requests, 'max_requests'),
+      max_tokens: entitlementInteger(row.max_tokens, 'max_tokens'),
+      max_api_keys: entitlementInteger(row.max_api_keys, 'max_api_keys'),
+    });
+    if (!await isLockedApiKeyActive(client, key.key_id, key.organization_id)) {
+      throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
+    }
+    await client.query('COMMIT');
+    res.status(200).json(response);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createCliSessionHandler(
