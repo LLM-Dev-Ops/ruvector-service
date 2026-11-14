@@ -379,10 +379,17 @@ export async function authorizeCliSessionHandler(
         FOR SHARE`,
       [user.issuer, user.subject]
     );
-    const membership = membershipResult.rows[0];
-    if (!membership) {
+    if (membershipResult.rows.length === 0) {
       throw new AppError(403, 'identity_membership_required', 'Verified user has no active tenant membership');
     }
+    if (membershipResult.rows.length !== 1) {
+      throw new AppError(
+        403,
+        'identity_membership_ambiguous',
+        'Verified user has multiple active tenant memberships'
+      );
+    }
+    const membership = membershipResult.rows[0];
     if (membership.role !== 'owner') {
       throw new AppError(403, 'identity_owner_required', 'Only an active tenant owner may authorize CLI API keys');
     }

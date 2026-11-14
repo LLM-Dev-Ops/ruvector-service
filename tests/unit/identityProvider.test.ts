@@ -379,6 +379,37 @@ describe('IAM-scoped identity provider', () => {
     );
   });
 
+  it('rejects ambiguous active memberships before reading or mutating the CLI session', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [
+          {
+            issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-one',
+            email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+          },
+          {
+            issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-two',
+            email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+          },
+        ] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: 'owner@example.test' })))
+      .rejects.toMatchObject({ statusCode: 403, code: 'identity_membership_ambiguous' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_cli_sessions'), expect.anything()
+    );
+  });
+
   it.each([
     ['at the active key limit', { max_api_keys: 2, active_api_keys: 2 }, 'api_key_limit_reached', 409],
     ['with a missing entitlement row', null, 'invalid_api_key_entitlement', 500],
