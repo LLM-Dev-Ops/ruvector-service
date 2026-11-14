@@ -33,6 +33,7 @@ interface EntitlementRow {
   max_requests: number | string;
   max_tokens: number | string;
   max_api_keys: number | string;
+  scopes: unknown;
 }
 
 interface ApiKeyLimitRow {
@@ -278,7 +279,7 @@ export async function lookupEntitlementHandler(
 ): Promise<void> {
   const input = lookupRequest(req);
   const result = await db.query<EntitlementRow>(
-    `SELECT organization_id, plan, max_requests, max_tokens, max_api_keys
+    `SELECT organization_id, plan, max_requests, max_tokens, max_api_keys, scopes
        FROM data_plane_identity_lookup
       WHERE key_hash = $1
         AND is_active = TRUE
@@ -287,7 +288,7 @@ export async function lookupEntitlementHandler(
     [input.key_hash]
   );
   const row = result.rows[0];
-  if (!row) {
+  if (!row || !isCurrentScopeList(row.scopes)) {
     throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
   }
 

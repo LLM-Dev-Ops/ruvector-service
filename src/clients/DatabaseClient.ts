@@ -581,7 +581,7 @@ export class DatabaseClient {
         ALTER TABLE data_plane_identity_organizations
           ALTER COLUMN max_api_keys TYPE BIGINT;
         CREATE VIEW data_plane_identity_lookup AS
-        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at,
+        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at, k.scopes,
                o.organization_id, o.plan, o.max_requests, o.max_tokens, o.max_api_keys
           FROM data_plane_api_keys k
           JOIN data_plane_identity_organizations o USING (organization_id);

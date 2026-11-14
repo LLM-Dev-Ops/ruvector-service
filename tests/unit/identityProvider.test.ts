@@ -70,7 +70,7 @@ describe('IAM-scoped identity provider', () => {
   it('returns the entitlement bound to the same active key hash', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{
       organization_id: 'org-test', plan: 'developer', max_requests: '10000',
-      max_tokens: '1000000', max_api_keys: '10',
+      max_tokens: '1000000', max_api_keys: '10', scopes: ['simulation:run'],
     }] }) };
     const res = response();
 
@@ -91,7 +91,7 @@ describe('IAM-scoped identity provider', () => {
   ])('fails closed instead of rounding an unsafe %s entitlement', async (field, value) => {
     const row = {
       organization_id: 'org-test', plan: 'enterprise', max_requests: '10000',
-      max_tokens: '1000000', max_api_keys: '10', [field]: value,
+      max_tokens: '1000000', max_api_keys: '10', scopes: ['simulation:run'], [field]: value,
     };
     const db = { query: jest.fn().mockResolvedValue({ rows: [row] }) };
     const res = response();
@@ -101,6 +101,26 @@ describe('IAM-scoped identity provider', () => {
       res,
       db as never
     )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_entitlement_value' });
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['retired scope', ['simulation:run', 'tenant:admin']],
+    ['duplicate scope', ['simulation:run', 'simulation:run']],
+    ['empty scope list', []],
+    ['malformed persisted scope list', { scope: 'simulation:run' }],
+  ])('fails closed without resolving entitlements for a key with a %s', async (_case, scopes) => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{
+      organization_id: 'org-test', plan: 'developer', max_requests: '10000',
+      max_tokens: '1000000', max_api_keys: '10', scopes,
+    }] }) };
+    const res = response();
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'entitlement_not_found' });
     expect(res.json).not.toHaveBeenCalled();
   });
 
