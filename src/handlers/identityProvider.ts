@@ -390,24 +390,35 @@ export async function createCliSessionHandler(
   const scopes = requestedScopes(parsed.data.scopes);
   const code = sessionCode();
   const deviceCode = randomBytes(32).toString('hex');
-  const inserted = await db.query<{ expires_at: Date | string }>(
-    `INSERT INTO data_plane_cli_sessions
-       (session_code, device_code_hash, cli_name, cli_version, hostname, requested_scopes, expires_at)
-     VALUES ($1,$2,$3,$4,$5,$6,NOW() + INTERVAL '10 minutes')
-     RETURNING expires_at`,
-    [code, sha256(deviceCode), parsed.data.cli_name ?? null, parsed.data.cli_version ?? null,
-      parsed.data.hostname ?? null, JSON.stringify(scopes)]
-  );
-  const verification = new URL(config.dataPlaneIdentity.verificationUrl);
-  verification.searchParams.set('code', code);
-  res.status(201).json(IdentityCliSessionCreatedSchema.parse({
-    session_code: code,
-    device_code: deviceCode,
-    verification_url: verification.toString(),
-    expires_at: timestamp(inserted.rows[0].expires_at),
-    expires_in_seconds: 600,
-    poll_interval_seconds: 5,
-  }));
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    const inserted = await client.query<{ expires_at: Date | string }>(
+      `INSERT INTO data_plane_cli_sessions
+         (session_code, device_code_hash, cli_name, cli_version, hostname, requested_scopes, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW() + INTERVAL '10 minutes')
+       RETURNING expires_at`,
+      [code, sha256(deviceCode), parsed.data.cli_name ?? null, parsed.data.cli_version ?? null,
+        parsed.data.hostname ?? null, JSON.stringify(scopes)]
+    );
+    const verification = new URL(config.dataPlaneIdentity.verificationUrl);
+    verification.searchParams.set('code', code);
+    const response = IdentityCliSessionCreatedSchema.parse({
+      session_code: code,
+      device_code: deviceCode,
+      verification_url: verification.toString(),
+      expires_at: timestamp(inserted.rows[0].expires_at),
+      expires_in_seconds: 600,
+      poll_interval_seconds: 5,
+    });
+    await client.query('COMMIT');
+    res.status(201).json(response);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function authorizeCliSessionHandler(

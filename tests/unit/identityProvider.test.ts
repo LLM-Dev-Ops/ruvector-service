@@ -260,7 +260,9 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('creates a bounded CLI session while persisting only a device-code hash', async () => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }) };
+    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
+      ? { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }
+      : { rows: [] });
     const res = response();
     await createCliSessionHandler({ body: {
       cli_name: 'agentics-cli', scopes: ['platform:read'],
@@ -270,8 +272,29 @@ describe('IAM-scoped identity provider', () => {
     expect(created.session_code).toMatch(/^[A-Z0-9]{8}$/);
     expect(created.device_code).toMatch(/^[a-f0-9]{64}$/);
     expect(created.verification_url).toBe(`https://platform.test/cli/auth?code=${created.session_code}`);
-    expect(db.query.mock.calls[0][1][1]).toBe(createHash('sha256').update(created.device_code).digest('hex'));
-    expect(db.query.mock.calls[0][1]).not.toContain(created.device_code);
+    const insertCall = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO data_plane_cli_sessions'));
+    expect(insertCall?.[1][1]).toBe(createHash('sha256').update(created.device_code).digest('hex'));
+    expect(insertCall?.[1]).not.toContain(created.device_code);
+    expect(client.query).toHaveBeenCalledWith('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+    expect(client.release).toHaveBeenCalled();
+  });
+
+  it('rolls back a provisional CLI session when the create response is invalid', async () => {
+    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
+      ? { rows: [{ expires_at: 'not-a-timestamp' }] }
+      : { rows: [] });
+    const res = response();
+
+    await expect(createCliSessionHandler({ body: {
+      cli_name: 'agentics-cli', scopes: ['platform:read'],
+    } } as Request, res, db as never)).rejects.toBeDefined();
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(client.release).toHaveBeenCalled();
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it('rejects tenant injection and unsupported scopes before creating a CLI session', async () => {
@@ -683,9 +706,13 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it('uses configured default scopes and rejects malformed session input', async () => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }) };
+    const { db, client } = transactionalDb(async (sql) => sql.includes('INSERT INTO data_plane_cli_sessions')
+      ? { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }
+      : { rows: [] });
     await createCliSessionHandler({ body: {} } as Request, response(), db as never);
-    expect(db.query.mock.calls[0][1][5]).toBe(JSON.stringify(['platform:read']));
+    const insertCall = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO data_plane_cli_sessions'));
+    expect(insertCall?.[1][5]).toBe(JSON.stringify(['platform:read']));
 
     await expect(createCliSessionHandler(
       { body: { scopes: [1] } } as unknown as Request, response(), db as never
@@ -700,7 +727,7 @@ describe('IAM-scoped identity provider', () => {
       response(),
       db as never
     )).rejects.toMatchObject({ code: 'validation_error' });
-    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(db.getClient).toHaveBeenCalledTimes(1);
   });
 
   it.each([
