@@ -58,6 +58,7 @@ interface CliSessionRow {
   authorized_issuer: string | null;
   authorized_subject: string | null;
   encrypted_api_key: string | null;
+  key_delivered_at: Date | string | null;
   expires_at: Date | string;
 }
 
@@ -646,7 +647,8 @@ export async function pollCliSessionHandler(
     await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
     const selected = await client.query<CliSessionRow>(
       `SELECT s.session_code, s.status, s.requested_scopes, s.organization_id, s.key_id,
-              s.authorized_issuer, s.authorized_subject, s.encrypted_api_key, s.expires_at
+              s.authorized_issuer, s.authorized_subject, s.encrypted_api_key,
+              s.key_delivered_at, s.expires_at
          FROM data_plane_cli_sessions s
         WHERE s.device_code_hash = $1
         FOR UPDATE`,
@@ -677,6 +679,15 @@ export async function pollCliSessionHandler(
     const membership = membershipResult.rows[0];
     if (!membership || membership.role !== 'owner') {
       throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
+    }
+    const hasEncryptedCopy = session.encrypted_api_key !== null;
+    const hasDeliveryMarker = session.key_delivered_at !== null;
+    if (hasEncryptedCopy === hasDeliveryMarker) {
+      throw new AppError(
+        500,
+        'invalid_session_delivery_state',
+        'Completed CLI session delivery state is inconsistent'
+      );
     }
     let activeKey: ActiveApiKeyRow | undefined;
     if (session.encrypted_api_key) {
