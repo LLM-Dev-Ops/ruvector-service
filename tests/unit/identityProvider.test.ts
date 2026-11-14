@@ -552,6 +552,52 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it('rolls back provisional key and session writes when expiry crosses before commit', async () => {
+    let expiryChecks = 0;
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) {
+          expiryChecks += 1;
+          return { rows: [{ is_unexpired: expiryChecks < 3 }] };
+        }
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
+          organization_id: null, key_id: null, encrypted_api_key: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+          email: null, payment_status: null, role: null,
+        }] };
+        if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+          max_api_keys: 10, active_api_keys: 1,
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, res, { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toMatchObject({ statusCode: 410, code: 'session_expired' });
+
+    expect(expiryChecks).toBe(3);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE data_plane_cli_sessions'), expect.anything()
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('uses configured default scopes and rejects malformed session input', async () => {
     const db = { query: jest.fn().mockResolvedValue({ rows: [{ expires_at: '2030-01-01T00:10:00Z' }] }) };
     await createCliSessionHandler({ body: {} } as Request, response(), db as never);
@@ -941,6 +987,54 @@ describe('IAM-scoped identity provider', () => {
     expect(client.query).not.toHaveBeenCalledWith(
       expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
     );
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('rolls back provisional delivery-copy erasure when expiry crosses before commit', async () => {
+    const plaintext = `agentics_sk_cli_${'d'.repeat(64)}`;
+    const keyId = 'c433a3fa-1d07-4e56-bf30-b9019c7f1415';
+    const encryptedKey = encryptedDelivery(plaintext, 'ABCDEFGH', 'org-test', keyId);
+    let expiryChecks = 0;
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) {
+          expiryChecks += 1;
+          return { rows: [{ is_unexpired: expiryChecks < 3 }] };
+        }
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: keyId,
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z',
+          is_unexpired: true,
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: keyId,
+          key_hash: createHash('sha256').update(plaintext).digest('hex'),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      res,
+      { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 410, code: 'session_expired' });
+
+    expect(expiryChecks).toBe(3);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(client.query).not.toHaveBeenCalledWith('COMMIT');
     expect(res.json).not.toHaveBeenCalled();
   });

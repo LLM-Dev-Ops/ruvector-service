@@ -447,12 +447,14 @@ export async function authorizeCliSessionHandler(
       if (!replayedKey) {
         throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
       }
-      await assertCliSessionUnexpired(client, routeCode);
       const replayResponse = IdentityCliSessionAuthorizedSchema.parse({
         success: true,
         organization_id: membership.organization_id,
         key_id: replayKeyId,
       });
+      // Response validation can outlive the post-lock check. Recheck at the
+      // transaction boundary so an expired replay cannot commit or disclose.
+      await assertCliSessionUnexpired(client, routeCode);
       await client.query('COMMIT');
       res.status(200).json(replayResponse);
       return;
@@ -532,6 +534,9 @@ export async function authorizeCliSessionHandler(
       [routeCode, membership.issuer, membership.subject, membership.organization_id,
         keyId, encryptApiKey(plaintextKey, routeCode, membership.organization_id, keyId)]
     );
+    // Inserts, uniqueness checks, foreign keys, and triggers may block after
+    // the pre-write check. Expiry here rolls back both provisional writes.
+    await assertCliSessionUnexpired(client, routeCode);
     await client.query('COMMIT');
     res.status(200).json(authorizedResponse);
   } catch (error) {
@@ -566,8 +571,10 @@ export async function pollCliSessionHandler(
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
     await assertCliSessionUnexpired(client, session.session_code);
     if (session.status === 'pending') {
+      const pendingResponse = IdentityCliSessionPollSchema.parse({ status: 'pending' });
+      await assertCliSessionUnexpired(client, session.session_code);
       await client.query('COMMIT');
-      res.status(200).json(IdentityCliSessionPollSchema.parse({ status: 'pending' }));
+      res.status(200).json(pendingResponse);
       return;
     }
     if (!session.organization_id || !session.key_id
@@ -633,6 +640,9 @@ export async function pollCliSessionHandler(
         [session.session_code]
       );
     }
+    // The erasure statement itself can block. A final wall-clock check makes
+    // expiry roll the erasure back before the one-time plaintext is disclosed.
+    await assertCliSessionUnexpired(client, session.session_code);
     await client.query('COMMIT');
     res.status(200).json(completedResponse);
   } catch (error) {
