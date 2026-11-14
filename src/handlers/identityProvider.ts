@@ -736,8 +736,13 @@ export async function pollCliSessionHandler(
         [session.session_code]
       );
     }
-    // The erasure statement itself can block. A final wall-clock check makes
-    // expiry roll the erasure back before the one-time plaintext is disclosed.
+    // Response validation and the erasure statement can outlive the first key
+    // activity check. Re-read expiry from the persistence wall clock at the
+    // transaction boundary so an expired key rolls the provisional erasure
+    // back and never yields completed metadata or plaintext.
+    if (!await isLockedApiKeyActive(client, activeKey.key_id, session.organization_id)) {
+      throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
+    }
     await assertCliSessionUnexpired(client, session.session_code);
     await client.query('COMMIT');
     res.status(200).json(completedResponse);

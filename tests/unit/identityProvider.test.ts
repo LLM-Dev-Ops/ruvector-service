@@ -1233,6 +1233,53 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it('rolls back provisional delivery-copy erasure when the key expires before commit', async () => {
+    const plaintext = `agentics_sk_cli_${'e'.repeat(64)}`;
+    const keyId = 'c433a3fa-1d07-4e56-bf30-b9019c7f1415';
+    const encryptedKey = encryptedDelivery(plaintext, 'ABCDEFGH', 'org-test', keyId);
+    let activityChecks = 0;
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) return { rows: [{ is_unexpired: true }] };
+        if (sql.includes('AS is_active')) {
+          activityChecks += 1;
+          return { rows: [{ is_active: activityChecks === 1 }] };
+        }
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: keyId,
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: encryptedKey, key_delivered_at: null,
+          expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: keyId,
+          key_hash: createHash('sha256').update(plaintext).digest('hex'),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      res, { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 410, code: 'session_api_key_inactive' });
+
+    expect(activityChecks).toBe(2);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['revoked membership'],
     ['membership moved to another tenant'],
