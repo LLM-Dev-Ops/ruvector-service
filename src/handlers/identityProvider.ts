@@ -70,6 +70,7 @@ interface CliSessionMembershipRow {
 interface ActiveApiKeyRow {
   key_id: string;
   key_hash: string;
+  name: string;
   scopes: unknown;
 }
 
@@ -119,6 +120,10 @@ function activeApiKeyScopes(value: unknown): string[] {
     throw new AppError(404, 'api_key_not_found', 'API key is not active');
   }
   return value;
+}
+
+function sameScopeSet(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((scope) => right.includes(scope));
 }
 
 function storedSessionScopes(value: unknown): string[] {
@@ -230,7 +235,7 @@ async function lockActiveApiKey(
   organizationId: string
 ): Promise<ActiveApiKeyRow | undefined> {
   const locked = await client.query<ActiveApiKeyRow>(
-    `SELECT key_id, key_hash, scopes
+    `SELECT key_id, key_hash, name, scopes
        FROM data_plane_api_keys
       WHERE key_id = $1 AND organization_id = $2
       FOR SHARE`,
@@ -515,6 +520,17 @@ export async function authorizeCliSessionHandler(
       );
       if (!replayedKey) {
         throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
+      }
+      const replayedScopes = activeApiKeyScopes(replayedKey.scopes);
+      if (
+        (parsed.data.key_name !== undefined && parsed.data.key_name !== replayedKey.name) ||
+        (parsed.data.scopes !== undefined && !sameScopeSet(parsed.data.scopes, replayedScopes))
+      ) {
+        throw new AppError(
+          409,
+          'session_authorization_conflict',
+          'Completed CLI session authorization parameters conflict with the issued key'
+        );
       }
       const replayResponse = IdentityCliSessionAuthorizedSchema.parse({
         success: true,

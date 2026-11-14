@@ -937,7 +937,7 @@ describe('IAM-scoped identity provider', () => {
         if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
         if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
           key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
-          key_hash: 'a'.repeat(64), scopes: ['platform:read'],
+          key_hash: 'a'.repeat(64), name: 'CLI Key', scopes: ['platform:read'],
         }] };
         return { rows: [] };
       }),
@@ -945,7 +945,8 @@ describe('IAM-scoped identity provider', () => {
     };
     const res = response();
     await authorizeCliSessionHandler({
-      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: 'CLI Key', scopes: ['platform:read'] },
       headers: { authorization: 'Bearer jwt' },
     } as unknown as Request, res, { getClient: jest.fn().mockResolvedValue(client) } as never,
     async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null }));
@@ -959,6 +960,43 @@ describe('IAM-scoped identity provider', () => {
     expect(replayKeyLockIndex).toBeGreaterThan(-1);
     expect(replayKeyActivityIndex).toBeGreaterThan(replayKeyLockIndex);
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything());
+  });
+
+  it.each([
+    ['key name', { key_name: 'Other Key' }],
+    ['scopes', { scopes: ['platform:write'] }],
+  ])('rejects completed authorization replay with conflicting %s', async (_case, replay) => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: null, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'a'.repeat(64),
+          name: 'CLI Key', scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH', ...replay },
+      headers: { authorization: 'Bearer jwt' },
+    } as unknown as Request, res, { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toMatchObject({ statusCode: 409, code: 'session_authorization_conflict' });
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it.each([
