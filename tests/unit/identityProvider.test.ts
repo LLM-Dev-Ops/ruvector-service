@@ -580,6 +580,10 @@ describe('IAM-scoped identity provider', () => {
       .rejects.toMatchObject({ code: scenario.code });
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(client.release).toHaveBeenCalled();
+    if (_case === 'completed cross-tenant session') {
+      expect(client.query.mock.calls.some(([sql]) =>
+        String(sql).includes('expires_at > clock_timestamp()'))).toBe(false);
+    }
   });
 
   it('replays a completed authorization idempotently for the same tenant', async () => {
@@ -652,6 +656,8 @@ describe('IAM-scoped identity provider', () => {
     } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
     async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
       .rejects.toMatchObject({ statusCode: 409, code: 'session_already_authorized' });
+    expect(client.query.mock.calls.some(([sql]) =>
+      String(sql).includes('expires_at > clock_timestamp()'))).toBe(false);
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('FROM data_plane_api_keys'), expect.anything());
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
   });

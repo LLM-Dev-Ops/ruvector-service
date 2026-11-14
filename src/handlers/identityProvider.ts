@@ -381,6 +381,20 @@ export async function authorizeCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    // A completed session is already bound to its original authorizing
+    // identity. Enforce that binding immediately after the session row lock,
+    // before expiry or key-state reads can disclose anything to another owner.
+    let replayKeyId: string | undefined;
+    if (session.status === 'completed') {
+      const persistedKeyId = session.key_id;
+      if (session.organization_id !== membership.organization_id
+        || session.authorized_issuer !== membership.issuer
+        || session.authorized_subject !== membership.subject
+        || !persistedKeyId) {
+        throw new AppError(409, 'session_already_authorized', 'CLI session was authorized by another identity');
+      }
+      replayKeyId = persistedKeyId;
+    }
     // NOW() is fixed at transaction start in PostgreSQL. Re-read expiry from
     // the persistence wall clock only after the session row lock is held so a
     // waiter cannot authorize a session that expired while it was blocked.
@@ -393,16 +407,10 @@ export async function authorizeCliSessionHandler(
     if (!expiry.rows[0]?.is_unexpired) {
       throw new AppError(410, 'session_expired', 'CLI session has expired');
     }
-    if (session.status === 'completed') {
-      if (session.organization_id !== membership.organization_id
-        || session.authorized_issuer !== membership.issuer
-        || session.authorized_subject !== membership.subject
-        || !session.key_id) {
-        throw new AppError(409, 'session_already_authorized', 'CLI session was authorized by another identity');
-      }
+    if (replayKeyId) {
       const replayedKey = await lockActiveApiKey(
         client,
-        session.key_id,
+        replayKeyId,
         membership.organization_id
       );
       if (!replayedKey) {
@@ -412,7 +420,7 @@ export async function authorizeCliSessionHandler(
       res.status(200).json(IdentityCliSessionAuthorizedSchema.parse({
         success: true,
         organization_id: membership.organization_id,
-        key_id: session.key_id,
+        key_id: replayKeyId,
       }));
       return;
     }
