@@ -130,6 +130,27 @@
 | `POST` | `/learning/assimilate` | Feedback assimilation agent (latency-budgeted) |
 | `GET` | `/learning/inspect` | Inspect learning events (read-only) |
 
+### Tenant-bound Identity Provider
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/data-plane/identity/api-keys/lookup` | Resolve an active API-key hash to its tenant-bound key record |
+| `POST` | `/v1/data-plane/identity/entitlements/lookup` | Resolve entitlement limits from the same active API-key hash |
+| `POST` | `/v1/data-plane/identity/cli/sessions` | Create a ten-minute CLI device-authorization session |
+| `GET` | `/v1/data-plane/identity/cli/sessions/:device_code` | Poll once-only API-key delivery by a hashed device code |
+| `POST` | `/v1/data-plane/identity/cli/sessions/:session_code/authorize` | Complete a session for a verified JWT subject with an existing tenant membership |
+
+These internal routes require an audience-bound Cloud Run identity whose
+principal is explicitly listed in `RUVVECTOR_IDENTITY_CALLER_PRINCIPALS`.
+They accept only a SHA-256 key hash—never a raw key or caller-supplied tenant.
+CLI session routes preserve that transport boundary using
+`X-Serverless-Authorization`; authorization additionally verifies the end-user
+JWT from `Authorization` against the configured ES256 JWKS, issuer and audience.
+Subjects must already exist in `data_plane_identity_memberships`; the provider
+does not infer or auto-create tenants. Device codes are stored only as hashes,
+requested scopes are allowlisted, and the one-time API key is AES-GCM encrypted
+until its first successful poll, when the ciphertext is erased atomically.
+
 ### Legacy Vector Operations
 
 | Method | Endpoint | Description |
@@ -198,6 +219,16 @@ All configuration is via environment variables. No `.env` files in production.
 | `RUVVECTOR_DB_NAME` | `ruvector-postgres` | Database name |
 | `RUVVECTOR_DB_USER` | `postgres` | Database user |
 | `RUVVECTOR_DB_PASSWORD` | — | Database password |
+| `RUVVECTOR_SERVICE_AUDIENCE` | — | Required Cloud Run identity-token audience |
+| `RUVVECTOR_PRINCIPAL_ORG_BINDINGS` | — | JSON principal-to-tenant bindings for tenant-scoped routes |
+| `RUVVECTOR_IDENTITY_CALLER_PRINCIPALS` | — | JSON array of IAM principals allowed to perform identity bootstrap |
+| `RUVVECTOR_IDENTITY_JWT_ISSUER` | — | Required HTTPS issuer for CLI end-user JWTs |
+| `RUVVECTOR_IDENTITY_JWT_AUDIENCE` | — | Required audience for CLI end-user JWTs |
+| `RUVVECTOR_IDENTITY_JWKS_URI` | — | Required HTTPS ES256 JWKS endpoint |
+| `RUVVECTOR_IDENTITY_VERIFICATION_URL` | — | Required HTTPS browser verification URL |
+| `RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY` | — | Canonical base64 encoding of the 32-byte AES-GCM key |
+| `RUVVECTOR_IDENTITY_ALLOWED_SCOPES` | — | Non-empty JSON array of scopes the provider may mint |
+| `RUVVECTOR_IDENTITY_DEFAULT_SCOPES` | — | Non-empty JSON subset used when a CLI omits scopes |
 | `RUVVECTOR_DB_MAX_CONNECTIONS` | `20` | Connection pool size |
 | `RUVVECTOR_DB_IDLE_TIMEOUT` | `30000` | Idle timeout (ms) |
 | `RUVVECTOR_DB_CONNECTION_TIMEOUT` | `10000` | Connection timeout (ms) |

@@ -25,6 +25,24 @@ process.env.ENABLE_METRICS = 'false';
 
 // Execution authority config for testing
 process.env.EXECUTION_HMAC_SECRET = 'test-hmac-secret-minimum-32-chars-long-for-testing-only';
+process.env.RUVVECTOR_SERVICE_AUDIENCE = 'https://ruvector.test';
+process.env.RUVVECTOR_PRINCIPAL_ORG_BINDINGS = JSON.stringify({
+  'platform@test.example': 'org-test',
+});
+process.env.RUVVECTOR_IDENTITY_CALLER_PRINCIPALS = JSON.stringify([
+  'platform@test.example',
+]);
+process.env.RUVVECTOR_IDENTITY_JWT_ISSUER = 'https://identity.test/auth/v1';
+process.env.RUVVECTOR_IDENTITY_JWT_AUDIENCE = 'authenticated';
+process.env.RUVVECTOR_IDENTITY_JWKS_URI = 'https://identity.test/auth/v1/.well-known/jwks.json';
+process.env.RUVVECTOR_IDENTITY_VERIFICATION_URL = 'https://platform.test/cli/auth';
+process.env.RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+process.env.RUVVECTOR_IDENTITY_ALLOWED_SCOPES = JSON.stringify([
+  'platform:read',
+  'platform:write',
+  'simulation:run',
+]);
+process.env.RUVVECTOR_IDENTITY_DEFAULT_SCOPES = JSON.stringify(['platform:read']);
 
 // Increase timeout for integration tests
 jest.setTimeout(30000);

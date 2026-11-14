@@ -411,6 +411,233 @@ export class DatabaseClient {
         ON executions(idempotency_key) WHERE idempotency_key IS NOT NULL
       `);
 
+      // Tenant-bound, append-only simulation event stream. Batch idempotency
+      // and per-simulation ordering are enforced in the shared RuVector store.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_simulation_events (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          simulation_id UUID NOT NULL,
+          seq INTEGER NOT NULL CHECK (seq > 0),
+          ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          kind VARCHAR(50) NOT NULL,
+          payload JSONB NOT NULL,
+          batch_idempotency_key VARCHAR(255) NOT NULL,
+          batch_index INTEGER NOT NULL CHECK (batch_index >= 0),
+          request_hash CHAR(64) NOT NULL,
+          CONSTRAINT data_plane_simulation_events_sequence_unique
+            UNIQUE (organization_id, simulation_id, seq),
+          CONSTRAINT data_plane_simulation_events_batch_unique
+            UNIQUE (organization_id, batch_idempotency_key, batch_index)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_simulation_events_replay
+        ON data_plane_simulation_events (organization_id, simulation_id, id)
+      `);
+
+      // Tenant-bound result index. The canonical result packet is preserved
+      // losslessly in JSONB while selected identifiers provide stable lookup.
+      // One serializable transaction stores each packet atomically.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_results (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          run_id VARCHAR(255) NOT NULL,
+          execution_id VARCHAR(255) NOT NULL,
+          simulation_id VARCHAR(255) NOT NULL,
+          scenario_id VARCHAR(255) NOT NULL,
+          environment VARCHAR(255) NOT NULL,
+          status VARCHAR(255) NOT NULL,
+          completed_at TIMESTAMPTZ NOT NULL,
+          stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          result JSONB NOT NULL,
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          CONSTRAINT data_plane_results_run_unique
+            UNIQUE (organization_id, run_id),
+          CONSTRAINT data_plane_results_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_results_replay
+        ON data_plane_results (organization_id, id)
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_results_lookup
+        ON data_plane_results (organization_id, execution_id, simulation_id)
+      `);
+
+      // Tenant-bound usage ledger. Entries are append-only; balances are
+      // materialized on each entry for auditable replay while reservations
+      // transition atomically under the same per-tenant serializable lock.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_usage_entries (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          entry_type VARCHAR(32) NOT NULL CHECK (entry_type IN ('grant', 'debit', 'reservation_consume')),
+          amount NUMERIC(20,6) NOT NULL,
+          balance_after NUMERIC(20,6) NOT NULL,
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          correlation_id VARCHAR(255) NOT NULL,
+          user_id VARCHAR(255),
+          service VARCHAR(255),
+          run_id VARCHAR(255),
+          metadata JSONB NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_usage_entries_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_usage_entries_replay
+        ON data_plane_usage_entries (organization_id, id)
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_usage_reservations (
+          id UUID PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL,
+          amount NUMERIC(20,6) NOT NULL CHECK (amount > 0),
+          status VARCHAR(32) NOT NULL CHECK (status IN ('active', 'consumed', 'cancelled', 'expired')),
+          idempotency_key VARCHAR(255) NOT NULL,
+          request_hash CHAR(64) NOT NULL,
+          correlation_id VARCHAR(255) NOT NULL,
+          user_id VARCHAR(255),
+          service VARCHAR(255),
+          run_id VARCHAR(255),
+          metadata JSONB NOT NULL DEFAULT '{}',
+          expires_at TIMESTAMPTZ NOT NULL,
+          final_action VARCHAR(16) CHECK (final_action IN ('consume', 'cancel')),
+          final_idempotency_key VARCHAR(255),
+          final_request_hash CHAR(64),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_usage_reservations_idempotency_unique
+            UNIQUE (organization_id, idempotency_key)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_data_plane_usage_reservations_final_idempotency
+        ON data_plane_usage_reservations (organization_id, final_idempotency_key)
+        WHERE final_idempotency_key IS NOT NULL
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_usage_reservations_active
+        ON data_plane_usage_reservations (organization_id, status, expires_at)
+      `);
+
+      // Identity bootstrap is authorized by an IAM service-principal allowlist.
+      // The key hash, never a raw API key or caller-supplied organization id,
+      // resolves tenant ownership and its entitlement limits.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_identity_organizations (
+          organization_id VARCHAR(255) PRIMARY KEY,
+          plan VARCHAR(32) NOT NULL CHECK (plan IN ('free', 'developer', 'team', 'enterprise')),
+          max_requests BIGINT NOT NULL CHECK (max_requests >= 0),
+          max_tokens BIGINT NOT NULL CHECK (max_tokens >= 0),
+          max_api_keys BIGINT NOT NULL CHECK (max_api_keys >= 0),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_api_keys (
+          key_id UUID PRIMARY KEY,
+          organization_id VARCHAR(255) NOT NULL REFERENCES data_plane_identity_organizations(organization_id),
+          name VARCHAR(255) NOT NULL,
+          scopes JSONB NOT NULL DEFAULT '[]',
+          key_hash CHAR(64) NOT NULL UNIQUE CHECK (key_hash ~ '^[a-f0-9]{64}$'),
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ,
+          revoked_at TIMESTAMPTZ,
+          last_used_at TIMESTAMPTZ
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_api_keys_organization
+        ON data_plane_api_keys (organization_id, key_id)
+      `);
+
+      // Older provider revisions created max_api_keys as a 32-bit INTEGER even
+      // though the authority permits the full lossless JSON integer range.
+      // The lookup view depends on this column, so replace the view around the
+      // lossless widening in one transaction. Existing callers never observe a
+      // missing view, and a failed migration restores the previous definition.
+      await this.pool.query(`
+        BEGIN;
+        DROP VIEW IF EXISTS data_plane_identity_lookup;
+        ALTER TABLE data_plane_identity_organizations
+          ALTER COLUMN max_api_keys TYPE BIGINT;
+        CREATE VIEW data_plane_identity_lookup AS
+        SELECT k.key_hash, k.is_active, k.revoked_at, k.expires_at, k.scopes,
+               o.organization_id, o.plan, o.max_requests, o.max_tokens, o.max_api_keys
+          FROM data_plane_api_keys k
+          JOIN data_plane_identity_organizations o USING (organization_id);
+        COMMIT;
+      `);
+
+      // Verified JWT subjects are provisioned to exactly one tenant through
+      // this provider-owned membership map. CLI authorization never accepts a
+      // caller-supplied organization id and never auto-creates a tenant.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_identity_memberships (
+          issuer TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          organization_id VARCHAR(255) NOT NULL REFERENCES data_plane_identity_organizations(organization_id),
+          email TEXT NOT NULL,
+          payment_status VARCHAR(16) NOT NULL CHECK (payment_status IN ('paid', 'unpaid', 'trial', 'internal')),
+          role VARCHAR(16) NOT NULL DEFAULT 'owner' CHECK (role = 'owner'),
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (issuer, subject)
+        )
+      `);
+
+      // Device codes are stored only as hashes. The one-time API key is
+      // AES-GCM encrypted under a runtime-managed key and erased atomically on
+      // first successful poll.
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS data_plane_cli_sessions (
+          session_code CHAR(8) PRIMARY KEY CHECK (session_code ~ '^[A-Z0-9]{8}$'),
+          device_code_hash CHAR(64) NOT NULL UNIQUE CHECK (device_code_hash ~ '^[a-f0-9]{64}$'),
+          status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed')),
+          cli_name VARCHAR(255),
+          cli_version VARCHAR(255),
+          hostname VARCHAR(255),
+          requested_scopes JSONB NOT NULL,
+          authorized_issuer TEXT,
+          authorized_subject TEXT,
+          organization_id VARCHAR(255) REFERENCES data_plane_identity_organizations(organization_id),
+          key_id UUID REFERENCES data_plane_api_keys(key_id),
+          encrypted_api_key TEXT,
+          expires_at TIMESTAMPTZ NOT NULL,
+          completed_at TIMESTAMPTZ,
+          key_delivered_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT data_plane_cli_sessions_identity_fk
+            FOREIGN KEY (authorized_issuer, authorized_subject)
+            REFERENCES data_plane_identity_memberships(issuer, subject)
+        )
+      `);
+
+      await this.pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_data_plane_cli_sessions_expiry
+        ON data_plane_cli_sessions (status, expires_at)
+      `);
+
       // Create decision_events_ingested table for externally published decision events
       // POST /events/decisions writes here; GET /events/decisions reads from here + decisions/approvals
       await this.pool.query(`

@@ -61,7 +61,7 @@ export interface NormalizedEvent {
 // Ingest Endpoint Interfaces
 // ============================================================================
 
-export interface IngestRequest extends NormalizedEvent {}
+export type IngestRequest = NormalizedEvent;
 
 export interface IngestResponse {
   eventId: string;
@@ -157,7 +157,7 @@ export interface ErrorResponse {
   error: string;                    // Error code (snake_case)
   message: string;                  // Human-readable message
   correlationId: string;            // Request correlation ID
-  details?: any[];                  // Optional additional details
+  details?: unknown[];              // Optional additional details
 }
 
 // ============================================================================

@@ -15,7 +15,7 @@ import { firePlanStoredHooks } from '../utils/hooks';
 export const createPlanSchema = z.object({
   id: z.string().uuid(),
   intent: z.string().min(1),
-  plan: z.record(z.unknown()),
+  plan: z.record(z.string(), z.unknown()),
   org_id: z.string().min(1),
   user_id: z.string().min(1),
   checksum: z.string().length(64),
@@ -83,12 +83,12 @@ export async function createPlanHandler(
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Plan validation failed');
+      logger.warn({ correlationId, errors: error.issues }, 'Plan validation failed');
       res.status(400).json({
         error: 'validation_error',
         message: 'Request validation failed',
         correlationId,
-        details: error.errors.map(e => ({
+        details: error.issues.map(e => ({
           path: e.path.join('.'),
           message: e.message,
         })),

@@ -48,7 +48,7 @@ export const ExecutionLineageMetadataSchema = z.object({
   root_span: ExecutionRootSpanSchema,
   caller_id: z.string().min(1),
   org_id: z.string().min(1),
-  simulation_context: z.record(z.unknown()),
+  simulation_context: z.record(z.string(), z.unknown()),
 });
 
 export type ExecutionLineageMetadata = z.infer<typeof ExecutionLineageMetadataSchema>;
@@ -62,7 +62,7 @@ export const LineageSeedSchema = z.object({
   intent_description: z.string().min(1),
   caller_id: z.string().min(1).optional(),
   org_id: z.string().min(1).optional(),
-  simulation_context: z.record(z.unknown()).optional(),
+  simulation_context: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type LineageSeed = z.infer<typeof LineageSeedSchema>;
@@ -92,7 +92,7 @@ export const ExecutionRecordSchema = z.object({
   caller_id: z.string().nullable(),
   org_id: z.string().nullable(),
   simulation_type: z.string().nullable(),
-  simulation_context: z.record(z.unknown()),
+  simulation_context: z.record(z.string(), z.unknown()),
   authority_signature: z.string().min(1),
   root_span_id: z.string().uuid(),
   lineage: z.union([ExecutionLineageMetadataSchema, LineageSeedSchema]),
@@ -110,7 +110,7 @@ export const AcceptExecutionRequestSchema = z.object({
   caller_id: z.string().min(1).max(255),
   org_id: z.string().min(1).max(255),
   simulation_type: z.string().min(1).max(100),
-  simulation_context: z.record(z.unknown()),
+  simulation_context: z.record(z.string(), z.unknown()),
   idempotency_key: z.string().max(255).optional(),
 });
 
@@ -159,7 +159,7 @@ export const AcceptanceRequestSchema = z.object({
   caller_id: z.string().min(1).max(255).optional(),
   org_id: z.string().min(1).max(255).optional(),
   simulation_type: z.string().min(1).max(100).optional(),
-  simulation_context: z.record(z.unknown()).optional(),
+  simulation_context: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type AcceptanceRequest = z.infer<typeof AcceptanceRequestSchema>;
@@ -196,7 +196,7 @@ export type DecisionSignals = z.infer<typeof DecisionSignalsSchema>;
 
 export const DecisionGraphRelationsSchema = z.object({
   objective_to_repos: z.array(z.string()),
-  repos_to_signals: z.record(z.array(z.string())),
+  repos_to_signals: z.record(z.string(), z.array(z.string())),
   signals_to_recommendation: z.array(z.string()),
 });
 
@@ -264,9 +264,9 @@ export const LearningDecisionEventSchema = z.object({
   agent_version: z.string().min(1),
   decision_type: z.enum(['approval_learning', 'feedback_assimilation']),
   inputs_hash: z.string().length(64),
-  outputs: z.record(z.unknown()),
+  outputs: z.record(z.string(), z.unknown()),
   confidence: z.number().min(0).max(1),
-  constraints_applied: z.record(z.unknown()),
+  constraints_applied: z.record(z.string(), z.unknown()),
   execution_ref: z.string().min(1),
   timestamp: z.string().datetime({ offset: true }),
 });
@@ -313,9 +313,9 @@ export const FeedbackAssimilationRequestSchema = z.object({
     feedback_source: z.string(),
     processing_method: z.string(),
   }),
-  outputs: z.record(z.unknown()).optional(),
+  outputs: z.record(z.string(), z.unknown()).optional(),
   confidence: z.number().min(0).max(1).optional(),
-  constraints_applied: z.record(z.unknown()).optional(),
+  constraints_applied: z.record(z.string(), z.unknown()).optional(),
   execution_ref: z.string().optional(),
   inputs_hash: z.string().optional(),
   timestamp: z.string().optional(),
@@ -373,7 +373,7 @@ export const TelemetryEnvelopeSchema = z.object({
   execution_id: z.string().regex(/^exec-[0-9a-f-]{36}$/),
   repo_name: z.string().min(1),
   timestamp: z.string().datetime({ offset: true }),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
 });
 
 export type TelemetryEnvelope = z.infer<typeof TelemetryEnvelopeSchema>;
@@ -440,7 +440,7 @@ export function validateContract<T>(schema: z.ZodSchema<T>, payload: unknown): T
   if (!result.success) {
     throw new ContractViolationError(
       'Contract validation failed',
-      result.error.errors.map(e => ({
+      result.error.issues.map(e => ({
         path: e.path.join('.'),
         message: e.message,
         code: e.code,

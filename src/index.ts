@@ -68,6 +68,32 @@ import {
 } from './handlers/lineage';
 import { createErpMappingHandler, listErpMappingsHandler } from './handlers/erpMappings';
 import { createIntegrationProposalHandler, listIntegrationProposalsHandler } from './handlers/integrationProposals';
+import {
+  appendSimulationEventsHandler,
+  replaySimulationEventsHandler,
+} from './handlers/simulationEvents';
+import { requireDataPlaneTenant, requireIdentityProviderCaller } from './middleware/tenantIdentity';
+import {
+  getResultIndexScenarioHandler,
+  getResultIndexSummaryHandler,
+  getResultIndexHandler,
+  listResultIndexHandler,
+  storeResultIndexHandler,
+} from './handlers/resultIndex';
+import {
+  appendUsageEntryHandler,
+  cancelUsageReservationHandler,
+  consumeUsageReservationHandler,
+  createUsageReservationHandler,
+  getUsageBalanceHandler,
+} from './handlers/usageLedger';
+import {
+  authorizeCliSessionHandler,
+  createCliSessionHandler,
+  lookupApiKeyHandler,
+  lookupEntitlementHandler,
+  pollCliSessionHandler,
+} from './handlers/identityProvider';
 
 /**
  * Request metrics middleware - SPARC compliant
@@ -331,6 +357,87 @@ function createApp(vectorClient: VectorClient, dbClient: DatabaseClient): Applic
   // PUT /v1/simulations/:id - Update a simulation
   app.put('/v1/simulations/:id', (req, res, next) => {
     updateSimulationHandler(req, res, dbClient).catch(next);
+  });
+
+  // Tenant-bound provider contract. Cloud Run IAM establishes transport
+  // identity; requireDataPlaneTenant binds that principal to one organization.
+  app.post('/v1/data-plane/simulation-events', requireDataPlaneTenant, (req, res, next) => {
+    appendSimulationEventsHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get(
+    '/v1/data-plane/simulations/:simulation_id/events',
+    requireDataPlaneTenant,
+    (req, res, next) => {
+      replaySimulationEventsHandler(req, res, dbClient).catch(next);
+    }
+  );
+
+  app.post('/v1/data-plane/results', requireDataPlaneTenant, (req, res, next) => {
+    storeResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results', requireDataPlaneTenant, (req, res, next) => {
+    listResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results/summary', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexSummaryHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results/scenarios/:scenario_id', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexScenarioHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/results/:result_id', requireDataPlaneTenant, (req, res, next) => {
+    getResultIndexHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/entries', requireDataPlaneTenant, (req, res, next) => {
+    appendUsageEntryHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/usage/balance', requireDataPlaneTenant, (req, res, next) => {
+    getUsageBalanceHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations', requireDataPlaneTenant, (req, res, next) => {
+    createUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations/:reservation_id/consume', requireDataPlaneTenant, (req, res, next) => {
+    consumeUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/usage/reservations/:reservation_id/cancel', requireDataPlaneTenant, (req, res, next) => {
+    cancelUsageReservationHandler(req, res, dbClient).catch(next);
+  });
+
+  // Identity bootstrap uses a separately allowlisted Cloud Run caller because
+  // the API-key hash is what discovers the application tenant. Neither route
+  // accepts organization scope from the caller.
+  app.post('/v1/data-plane/identity/api-keys/lookup', requireIdentityProviderCaller, (req, res, next) => {
+    lookupApiKeyHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/identity/entitlements/lookup', requireIdentityProviderCaller, (req, res, next) => {
+    lookupEntitlementHandler(req, res, dbClient).catch(next);
+  });
+
+  // CLI device authorization keeps transport and application identity
+  // separate: Cloud Run authenticates the allowlisted platform caller through
+  // X-Serverless-Authorization, while the authorize route verifies the
+  // end-user JWT carried in Authorization.
+  app.post('/v1/data-plane/identity/cli/sessions', requireIdentityProviderCaller, (req, res, next) => {
+    createCliSessionHandler(req, res, dbClient).catch(next);
+  });
+
+  app.get('/v1/data-plane/identity/cli/sessions/:device_code', requireIdentityProviderCaller, (req, res, next) => {
+    pollCliSessionHandler(req, res, dbClient).catch(next);
+  });
+
+  app.post('/v1/data-plane/identity/cli/sessions/:session_code/authorize', requireIdentityProviderCaller, (req, res, next) => {
+    authorizeCliSessionHandler(req, res, dbClient).catch(next);
   });
 
   // ============================================================================
