@@ -989,6 +989,46 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it('rolls back without erasing the delivery copy when the completed response is invalid', async () => {
+    const plaintextKey = `agentics_sk_cli_${'3'.repeat(64)}`;
+    const keyId = 'e655c51c-3f29-4a78-ad52-db23be903637';
+    const encryptedKey = encryptedDelivery(plaintextKey, 'ABCDEFGH', 'org-test', keyId);
+    const res = response();
+    const client = {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: keyId,
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: encryptedKey, expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'not-an-email', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: keyId,
+          key_hash: createHash('sha256').update(plaintextKey).digest('hex'),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'c'.repeat(64) } } as unknown as Request,
+      res, { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toBeDefined();
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('returns pending and redelivered-completed states without exposing a second key', async () => {
     const sessions = [
       { status: 'pending', expires_at: '2030-01-01T00:10:00Z', is_unexpired: true },

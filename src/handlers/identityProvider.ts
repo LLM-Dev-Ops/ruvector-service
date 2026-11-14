@@ -597,6 +597,16 @@ export async function pollCliSessionHandler(
           'Encrypted CLI key is not bound to the authorized API key'
         );
       }
+    }
+    const completedResponse = IdentityCliSessionPollSchema.parse({
+      status: 'completed',
+      ...(plaintextKey ? { api_key: plaintextKey } : {}),
+      email: membership.email,
+      payment_status: membership.payment_status,
+      organization_id: session.organization_id,
+      role: membership.role,
+    });
+    if (plaintextKey) {
       await client.query(
         `UPDATE data_plane_cli_sessions
             SET encrypted_api_key = NULL, key_delivered_at = NOW()
@@ -605,14 +615,7 @@ export async function pollCliSessionHandler(
       );
     }
     await client.query('COMMIT');
-    res.status(200).json(IdentityCliSessionPollSchema.parse({
-      status: 'completed',
-      ...(plaintextKey ? { api_key: plaintextKey } : {}),
-      email: membership.email,
-      payment_status: membership.payment_status,
-      organization_id: session.organization_id,
-      role: membership.role,
-    }));
+    res.status(200).json(completedResponse);
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
