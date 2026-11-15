@@ -563,16 +563,21 @@ export async function authorizeCliSessionHandler(
       [`identity-api-keys:${membership.organization_id}`]
     );
     const limitResult = await client.query<ApiKeyLimitRow>(
-      `SELECT o.max_api_keys,
-              COUNT(k.key_id) FILTER (
-                WHERE k.is_active = TRUE
-                  AND k.revoked_at IS NULL
-                  AND (k.expires_at IS NULL OR k.expires_at > clock_timestamp())
-              )::bigint AS active_api_keys
-         FROM data_plane_identity_organizations o
-         LEFT JOIN data_plane_api_keys k ON k.organization_id = o.organization_id
-        WHERE o.organization_id = $1
-        GROUP BY o.max_api_keys`,
+      `WITH locked_organization AS (
+         SELECT max_api_keys
+           FROM data_plane_identity_organizations
+          WHERE organization_id = $1
+          FOR SHARE
+       )
+       SELECT o.max_api_keys,
+              (SELECT COUNT(k.key_id) FILTER (
+                        WHERE k.is_active = TRUE
+                          AND k.revoked_at IS NULL
+                          AND (k.expires_at IS NULL OR k.expires_at > clock_timestamp())
+                      )::bigint AS active_api_keys
+                 FROM data_plane_api_keys k
+                WHERE k.organization_id = $1) AS active_api_keys
+         FROM locked_organization o`,
       [membership.organization_id]
     );
     const limit = limitResult.rows[0];

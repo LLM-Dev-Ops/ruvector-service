@@ -602,6 +602,8 @@ describe('IAM-scoped identity provider', () => {
       String(sql).includes('FROM data_plane_identity_organizations'));
     expect(activeKeyCountIndex).toBeGreaterThan(tenantLockIndex);
     const activeKeyCountSql = String(client.query.mock.calls[activeKeyCountIndex][0]);
+    expect(activeKeyCountSql).toContain('WITH locked_organization AS');
+    expect(activeKeyCountSql).toMatch(/data_plane_identity_organizations[\s\S]*FOR SHARE/);
     expect(activeKeyCountSql).toContain('k.expires_at > clock_timestamp()');
     expect(activeKeyCountSql).not.toContain('k.expires_at > NOW()');
     expect(activeKeyCountSql).toContain(')::bigint AS active_api_keys');
