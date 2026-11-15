@@ -56,6 +56,50 @@ describe('end-user identity JWT verification', () => {
     });
   });
 
+  it('rejects a multi-audience token without an authorized party', async () => {
+    const ambiguousAudience = jwt.sign({
+      email: 'owner@example.test',
+      aud: ['authenticated', 'other-client'],
+    }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(ambiguousAudience)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
+  it('accepts a multi-audience token only when azp identifies this client', async () => {
+    const boundAudience = jwt.sign({
+      email: 'owner@example.test',
+      aud: ['authenticated', 'other-client'],
+      azp: 'authenticated',
+    }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(boundAudience)).resolves.toMatchObject({
+      issuer: 'https://identity.test/auth/v1',
+      subject: 'user-1',
+    });
+  });
+
+  it('rejects a token whose authorized party is another client', async () => {
+    const wrongAuthorizedParty = jwt.sign({
+      email: 'owner@example.test',
+      aud: ['authenticated', 'other-client'],
+      azp: 'other-client',
+    }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(wrongAuthorizedParty)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
   it.each([
     ['missing key id', { alg: 'ES256', typ: 'JWT' }],
     ['wrong algorithm', { alg: 'RS256', typ: 'JWT', kid: 'test-key' }],
