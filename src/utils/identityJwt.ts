@@ -44,6 +44,7 @@ function signingKey(
 ): void {
   if (
     header.alg !== 'ES256' ||
+    header.typ !== 'JWT' ||
     typeof header.kid !== 'string' ||
     header.kid.length === 0 ||
     header.kid.trim() !== header.kid ||

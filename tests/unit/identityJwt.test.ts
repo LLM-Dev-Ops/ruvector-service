@@ -175,6 +175,34 @@ describe('end-user identity JWT verification', () => {
     }
   });
 
+  it.each([
+    ['a missing token type', undefined],
+    ['an alternate token type', 'at+jwt'],
+    ['a whitespace-padded token type', ' JWT '],
+    ['a non-string token type', 42],
+  ])('rejects signing metadata with %s before JWKS lookup', async (caseName, typ) => {
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = `https://identity.test/${caseName.replaceAll(' ', '-')}-jwks`;
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+    const header: Record<string, unknown> = { alg: 'ES256', kid: 'test-key' };
+    if (typ !== undefined) header.typ = typ;
+    try {
+      await expect(verifyEndUserJwt(unsignedMetadataToken(
+        header,
+        {
+          iss: 'https://identity.test/auth/v1',
+          sub: 'user-1',
+          aud: 'authenticated',
+          exp: Math.floor(Date.now() / 1000) + 300,
+        },
+      ))).rejects.toMatchObject({ statusCode: 401, code: 'invalid_end_user_token' });
+      expect(getSigningKey).not.toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
+  });
+
   it('rejects a correctly signed token with an unsupported critical header', async () => {
     const unsupportedCriticalHeader = jwt.sign({ email: 'owner@example.test' }, privateKey, {
       algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
