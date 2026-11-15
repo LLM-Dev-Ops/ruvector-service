@@ -541,6 +541,9 @@ export async function authorizeCliSessionHandler(
       // Response validation can outlive the post-lock check. Recheck at the
       // transaction boundary so an expired replay cannot commit or disclose.
       await assertCliSessionUnexpired(client, routeCode);
+      if (!await isLockedApiKeyActive(client, replayedKey.key_id, membership.organization_id)) {
+        throw new AppError(409, 'session_key_not_active', 'CLI session key is not active for this tenant');
+      }
       await client.query('COMMIT');
       res.status(200).json(replayResponse);
       return;
