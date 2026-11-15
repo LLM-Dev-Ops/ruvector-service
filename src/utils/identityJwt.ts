@@ -3,6 +3,10 @@ import jwksClient, { JwksClient } from 'jwks-rsa';
 import { z } from 'zod';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
+import {
+  parseEndUserJwtConfiguration,
+  type EndUserJwtConfiguration,
+} from './identityJwtConfiguration';
 
 export interface VerifiedEndUser {
   issuer: string;
@@ -18,9 +22,9 @@ const EndUserEmailSchema = z.string().email().refine(
   'Email must not contain surrounding whitespace'
 );
 
-function signingClient(): JwksClient {
-  if (!client || clientUri !== config.dataPlaneIdentity.jwksUri) {
-    clientUri = config.dataPlaneIdentity.jwksUri;
+function signingClient(jwksUri: string): JwksClient {
+  if (!client || clientUri !== jwksUri) {
+    clientUri = jwksUri;
     client = jwksClient({
       jwksUri: clientUri,
       cache: true,
@@ -33,7 +37,11 @@ function signingClient(): JwksClient {
   return client;
 }
 
-function signingKey(header: JwtHeader, callback: SigningKeyCallback): void {
+function signingKey(
+  configuration: EndUserJwtConfiguration,
+  header: JwtHeader,
+  callback: SigningKeyCallback
+): void {
   if (
     header.alg !== 'ES256' ||
     typeof header.kid !== 'string' ||
@@ -44,17 +52,31 @@ function signingKey(header: JwtHeader, callback: SigningKeyCallback): void {
     callback(new Error('JWT signing metadata is invalid'));
     return;
   }
-  signingClient().getSigningKey(header.kid)
+  signingClient(configuration.jwksUri).getSigningKey(header.kid)
     .then((key) => callback(null, key.getPublicKey()))
     .catch((error: Error) => callback(error));
 }
 
 export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> {
-  const payload = await new Promise<JwtPayload>((resolve, reject) => {
-    jwt.verify(token, signingKey, {
-      algorithms: ['ES256'],
+  let identityConfiguration: EndUserJwtConfiguration;
+  try {
+    identityConfiguration = parseEndUserJwtConfiguration({
       issuer: config.dataPlaneIdentity.jwtIssuer,
       audience: config.dataPlaneIdentity.jwtAudience,
+      jwksUri: config.dataPlaneIdentity.jwksUri,
+    });
+  } catch (error) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      error instanceof Error ? error.message : 'JWT verification configuration is invalid'
+    );
+  }
+  const payload = await new Promise<JwtPayload>((resolve, reject) => {
+    jwt.verify(token, (header, callback) => signingKey(identityConfiguration, header, callback), {
+      algorithms: ['ES256'],
+      issuer: identityConfiguration.issuer,
+      audience: identityConfiguration.audience,
     }, (error, decoded) => {
       if (error || !decoded || typeof decoded === 'string') {
         reject(error ?? new Error('JWT payload is invalid'));
@@ -69,7 +91,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
   if (
     typeof payload.sub !== 'string' || payload.sub.length === 0 ||
     payload.sub.trim() !== payload.sub ||
-    payload.iss !== config.dataPlaneIdentity.jwtIssuer ||
+    payload.iss !== identityConfiguration.issuer ||
     typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0
   ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token lacks required claims');
@@ -83,13 +105,13 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
       typeof audience !== 'string' || audience.length === 0 || audience.trim() !== audience
     ) ||
     new Set(audiences).size !== audiences.length ||
-    audiences.filter((audience) => audience === config.dataPlaneIdentity.jwtAudience).length !== 1
+    audiences.filter((audience) => audience === identityConfiguration.audience).length !== 1
   ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid audience claim');
   }
   if (
-    (audiences.length > 1 && payload.azp !== config.dataPlaneIdentity.jwtAudience) ||
-    (payload.azp !== undefined && payload.azp !== config.dataPlaneIdentity.jwtAudience)
+    (audiences.length > 1 && payload.azp !== identityConfiguration.audience) ||
+    (payload.azp !== undefined && payload.azp !== identityConfiguration.audience)
   ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid authorized party');
   }
@@ -100,7 +122,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid email claim');
   }
   return {
-    issuer: payload.iss,
+    issuer: identityConfiguration.issuer,
     subject: payload.sub,
     email: email === null ? null : email.data.toLowerCase(),
   };

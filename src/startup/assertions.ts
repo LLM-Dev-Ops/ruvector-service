@@ -13,6 +13,7 @@ import {
   parseServiceAudience,
 } from '../utils/principalBindings';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
+import { parseEndUserJwtConfiguration } from '../utils/identityJwtConfiguration';
 
 /**
  * Required environment variables for production operation.
@@ -96,9 +97,17 @@ export function assertDataPlaneIdentity(): void {
   ] as const) {
     if (!value) throw new Error(`FATAL: ${name} is required for CLI identity sessions.`);
   }
+  try {
+    parseEndUserJwtConfiguration({
+      issuer: config.dataPlaneIdentity.jwtIssuer,
+      audience: config.dataPlaneIdentity.jwtAudience,
+      jwksUri: config.dataPlaneIdentity.jwksUri,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'JWT verification configuration is invalid';
+    throw new Error(`FATAL: ${reason}.`);
+  }
   for (const [name, value] of [
-    ['RUVVECTOR_IDENTITY_JWT_ISSUER', config.dataPlaneIdentity.jwtIssuer],
-    ['RUVVECTOR_IDENTITY_JWKS_URI', config.dataPlaneIdentity.jwksUri],
     ['RUVVECTOR_IDENTITY_VERIFICATION_URL', config.dataPlaneIdentity.verificationUrl],
   ] as const) {
     try {

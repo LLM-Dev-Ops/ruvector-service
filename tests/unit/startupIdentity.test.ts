@@ -49,6 +49,16 @@ describe('identity provider startup assertions', () => {
   });
 
   it.each([
+    ['JWT issuer', 'jwtIssuer', ' https://identity.test/auth/v1 '],
+    ['JWT audience', 'jwtAudience', ' authenticated '],
+    ['whitespace-only JWT audience', 'jwtAudience', '   '],
+    ['JWKS URI', 'jwksUri', ' https://identity.test/.well-known/jwks.json '],
+  ])('rejects a non-canonical %s', (_case, field, value) => {
+    (config.dataPlaneIdentity as unknown as Record<string, string>)[field] = value;
+    expect(() => assertDataPlaneIdentity()).toThrow(/without surrounding whitespace/);
+  });
+
+  it.each([
     ['principal bindings', 'principalOrgBindings', '{', /PRINCIPAL_ORG_BINDINGS must be valid JSON/],
     ['identity callers', 'identityCallerPrincipals', '{', /IDENTITY_CALLER_PRINCIPALS must be valid JSON/],
     ['scope configuration', 'allowedScopes', '{', /scope configuration must be valid JSON/],

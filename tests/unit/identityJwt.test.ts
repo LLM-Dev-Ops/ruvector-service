@@ -56,6 +56,28 @@ describe('end-user identity JWT verification', () => {
     });
   });
 
+  it.each([
+    ['JWT issuer', 'jwtIssuer', ' https://identity.test/auth/v1 '],
+    ['JWT audience', 'jwtAudience', ' authenticated '],
+    ['JWKS URI', 'jwksUri', ' https://identity.test/.well-known/jwks.json '],
+  ])('fails closed for non-canonical %s configuration before verification', async (
+    _case,
+    field,
+    value,
+  ) => {
+    const identityConfig = config.dataPlaneIdentity as unknown as Record<string, string>;
+    const original = identityConfig[field];
+    identityConfig[field] = value;
+    try {
+      await expect(verifyEndUserJwt(token())).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'identity_configuration_error',
+      });
+    } finally {
+      identityConfig[field] = original;
+    }
+  });
+
   it('rejects a multi-audience token without an authorized party', async () => {
     const ambiguousAudience = jwt.sign({
       email: 'owner@example.test',
