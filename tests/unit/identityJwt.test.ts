@@ -103,6 +103,8 @@ describe('end-user identity JWT verification', () => {
   it.each([
     ['duplicate audience entries', ['authenticated', 'authenticated']],
     ['an empty audience entry', ['authenticated', '']],
+    ['a whitespace-only audience entry', ['authenticated', '   ']],
+    ['a whitespace-padded audience entry', ['authenticated', ' other-client ']],
   ])('rejects a multi-audience token with %s', async (_case, audience) => {
     const malformedAudience = jwt.sign({
       email: 'owner@example.test',

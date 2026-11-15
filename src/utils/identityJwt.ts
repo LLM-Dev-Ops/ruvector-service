@@ -79,7 +79,9 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
     : Array.isArray(payload.aud) ? payload.aud : [];
   if (
     audiences.length === 0 ||
-    audiences.some((audience) => typeof audience !== 'string' || audience.length === 0) ||
+    audiences.some((audience) =>
+      typeof audience !== 'string' || audience.length === 0 || audience.trim() !== audience
+    ) ||
     new Set(audiences).size !== audiences.length ||
     audiences.filter((audience) => audience === config.dataPlaneIdentity.jwtAudience).length !== 1
   ) {
