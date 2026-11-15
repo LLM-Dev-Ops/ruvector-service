@@ -58,6 +58,27 @@ describe('tenant-bound data-plane identity', () => {
     expect(error.code).toBe(code);
   });
 
+  it.each([
+    ['duplicate audience entries', ['https://ruvector.test', 'https://ruvector.test']],
+    ['an empty audience entry', ['https://ruvector.test', '']],
+    ['a whitespace-only audience entry', ['https://ruvector.test', '   ']],
+    ['a whitespace-padded audience entry', ['https://ruvector.test', ' other-service ']],
+    ['a non-string audience entry', ['https://ruvector.test', 42]],
+  ])('rejects a transport token with %s', (_case, aud) => {
+    const req = request({
+      aud, email: 'platform@test.example', sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'invalid_audience',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('requires a Cloud Run IAM bearer identity', () => {
     const next = jest.fn() as NextFunction;
 

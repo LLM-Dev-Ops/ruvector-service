@@ -53,8 +53,18 @@ function decodeClaims(token: string): CloudRunClaims {
 function requireIamClaims(req: Request): VerifiedIamClaims {
   const claims = decodeClaims(bearerToken(req));
   const audience = config.dataPlaneIdentity.serviceAudience;
-  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audience || !audiences.includes(audience)) {
+  const audiences = typeof claims.aud === 'string'
+    ? [claims.aud]
+    : Array.isArray(claims.aud) ? claims.aud : [];
+  if (
+    !audience ||
+    audiences.length === 0 ||
+    audiences.some((entry) =>
+      typeof entry !== 'string' || entry.length === 0 || entry.trim() !== entry
+    ) ||
+    new Set(audiences).size !== audiences.length ||
+    audiences.filter((entry) => entry === audience).length !== 1
+  ) {
     throw new AppError(401, 'invalid_audience', 'Cloud Run IAM identity token audience does not match this service');
   }
   if (!claims.email || !claims.sub) {
