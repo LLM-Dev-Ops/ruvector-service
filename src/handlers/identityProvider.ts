@@ -200,11 +200,13 @@ function decryptApiKey(
 
 function endUserToken(req: Request): string {
   const header = req.headers.authorization;
-  const value = Array.isArray(header) ? header[0] : header;
-  if (!value?.startsWith('Bearer ')) {
+  if (Array.isArray(header) || typeof header !== 'string' || !header.startsWith('Bearer ')) {
     throw new AppError(401, 'end_user_authentication_required', 'End-user JWT is required');
   }
-  const token = value.slice('Bearer '.length);
+  const token = header.slice('Bearer '.length);
+  if (token.length === 0 || token.trim() !== token) {
+    throw new AppError(401, 'end_user_authentication_required', 'End-user JWT is required');
+  }
   if (token.startsWith('agentics_')) {
     throw new AppError(401, 'end_user_jwt_required', 'API keys cannot authorize CLI sessions');
   }
