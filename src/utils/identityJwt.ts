@@ -61,7 +61,17 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
   ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token lacks required claims');
   }
-  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  const audiences = typeof payload.aud === 'string'
+    ? [payload.aud]
+    : Array.isArray(payload.aud) ? payload.aud : [];
+  if (
+    audiences.length === 0 ||
+    audiences.some((audience) => typeof audience !== 'string' || audience.length === 0) ||
+    new Set(audiences).size !== audiences.length ||
+    audiences.filter((audience) => audience === config.dataPlaneIdentity.jwtAudience).length !== 1
+  ) {
+    throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid audience claim');
+  }
   if (
     (audiences.length > 1 && payload.azp !== config.dataPlaneIdentity.jwtAudience) ||
     (payload.azp !== undefined && payload.azp !== config.dataPlaneIdentity.jwtAudience)

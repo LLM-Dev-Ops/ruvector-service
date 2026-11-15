@@ -101,6 +101,24 @@ describe('end-user identity JWT verification', () => {
   });
 
   it.each([
+    ['duplicate audience entries', ['authenticated', 'authenticated']],
+    ['an empty audience entry', ['authenticated', '']],
+  ])('rejects a multi-audience token with %s', async (_case, audience) => {
+    const malformedAudience = jwt.sign({
+      email: 'owner@example.test',
+      aud: audience,
+      azp: 'authenticated',
+    }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(malformedAudience)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
+  it.each([
     ['missing key id', { alg: 'ES256', typ: 'JWT' }],
     ['wrong algorithm', { alg: 'RS256', typ: 'JWT', kid: 'test-key' }],
   ])('rejects signing metadata with %s', async (_case, header) => {
