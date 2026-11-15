@@ -151,9 +151,14 @@ function sha256(value: string): string {
 }
 
 function encryptionKey(): Buffer {
-  const key = Buffer.from(config.dataPlaneIdentity.sessionEncryptionKey, 'base64');
-  if (key.length !== 32) {
-    throw new AppError(503, 'identity_configuration_error', 'CLI session encryption key is invalid');
+  const configured = config.dataPlaneIdentity.sessionEncryptionKey;
+  const key = Buffer.from(configured, 'base64');
+  if (key.length !== 32 || key.toString('base64') !== configured) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      'CLI session encryption key must be canonical base64 for exactly 32 bytes'
+    );
   }
   return key;
 }
@@ -170,10 +175,11 @@ function encryptApiKey(
   value: string,
   sessionCode: string,
   organizationId: string,
-  keyId: string
+  keyId: string,
+  key: Buffer
 ): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
   cipher.setAAD(deliveryBinding(sessionCode, organizationId, keyId));
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url')).join('.');
@@ -598,6 +604,11 @@ export async function authorizeCliSessionHandler(
     // immediately before any API-key or session mutation.
     await assertCliSessionUnexpired(client, routeCode);
 
+    // Validate one exact encryption-key snapshot before any provisional key or
+    // session mutation. Node's base64 decoder accepts non-canonical encodings,
+    // so length-only validation would otherwise allow runtime configuration
+    // drift that startup correctly rejects.
+    const sessionEncryptionKey = encryptionKey();
     const plaintextKey = `agentics_sk_cli_${randomBytes(32).toString('hex')}`;
     const keyId = randomUUID();
     const authorizedResponse = IdentityCliSessionAuthorizedSchema.parse({
@@ -629,7 +640,13 @@ export async function authorizeCliSessionHandler(
               organization_id = $4, key_id = $5, encrypted_api_key = $6, completed_at = NOW()
         WHERE session_code = $1`,
       [routeCode, membership.issuer, membership.subject, membership.organization_id,
-        keyId, encryptApiKey(plaintextKey, routeCode, membership.organization_id, keyId)]
+        keyId, encryptApiKey(
+          plaintextKey,
+          routeCode,
+          membership.organization_id,
+          keyId,
+          sessionEncryptionKey
+        )]
     );
     // Inserts, uniqueness checks, foreign keys, and triggers may block after
     // the pre-write check. Expiry here rolls back both provisional writes.

@@ -49,10 +49,12 @@ function transactionalDb(
 describe('IAM-scoped identity provider', () => {
   const originalAllowedScopes = config.dataPlaneIdentity.allowedScopes;
   const originalDefaultScopes = config.dataPlaneIdentity.defaultScopes;
+  const originalSessionEncryptionKey = config.dataPlaneIdentity.sessionEncryptionKey;
 
   afterEach(() => {
     config.dataPlaneIdentity.allowedScopes = originalAllowedScopes;
     config.dataPlaneIdentity.defaultScopes = originalDefaultScopes;
+    config.dataPlaneIdentity.sessionEncryptionKey = originalSessionEncryptionKey;
   });
 
   it('resolves tenant ownership from an active API-key hash without exposing the hash', async () => {
@@ -264,7 +266,7 @@ describe('IAM-scoped identity provider', () => {
       if (sql.includes('UPDATE data_plane_cli_sessions')) {
         return { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] };
       }
-      if (sql.includes('expires_at > clock_timestamp()')) {
+      if (sql.includes('SELECT s.expires_at > clock_timestamp()')) {
         return { rows: [{ is_unexpired: true }] };
       }
       return { rows: [] };
@@ -318,7 +320,7 @@ describe('IAM-scoped identity provider', () => {
       if (sql.includes('UPDATE data_plane_cli_sessions')) {
         return { rows: [{ expires_at: '2030-01-01T00:10:00Z' }] };
       }
-      if (sql.includes('expires_at > clock_timestamp()')) {
+      if (sql.includes('SELECT s.expires_at > clock_timestamp()')) {
         return { rows: [{ is_unexpired: false }] };
       }
       return { rows: [] };
@@ -465,6 +467,86 @@ describe('IAM-scoped identity provider', () => {
       /expires_at > clock_timestamp\(\)[\s\S]*AS is_active/.test(String(sql)));
     expect(pollKeyActivityIndex).toBeGreaterThan(pollKeyLockIndex);
     expect(pollClient.query).toHaveBeenCalledWith(expect.stringContaining('encrypted_api_key = NULL'), ['ABCDEFGH']);
+  });
+
+  it('rejects non-canonical session encryption configuration before key insertion', async () => {
+    config.dataPlaneIdentity.sessionEncryptionKey = `${originalSessionEncryptionKey}=`;
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('SELECT s.expires_at > clock_timestamp()')) {
+        return { rows: [{ is_unexpired: true }] };
+      }
+      if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+        issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+        email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+      }] };
+      if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [{
+        session_code: 'ABCDEFGH', status: 'pending', requested_scopes: ['platform:read'],
+        organization_id: null, key_id: null, encrypted_api_key: null,
+        expires_at: '2030-01-01T00:10:00Z',
+      }] };
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        max_api_keys: 10, active_api_keys: 1,
+      }] };
+      return { rows: [] };
+    });
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', scopes: ['platform:read'] },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, async () => ({
+      issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: 'owner@example.test',
+    }))).rejects.toMatchObject({
+      statusCode: 503, code: 'identity_configuration_error',
+    });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO data_plane_api_keys'), expect.anything()
+    );
+  });
+
+  it('rejects non-canonical session encryption configuration before plaintext delivery', async () => {
+    const plaintextKey = `agentics_sk_cli_${'4'.repeat(64)}`;
+    const keyId = 'f766d62d-4a3a-4b89-be63-ec34cf014748';
+    const encryptedKey = encryptedDelivery(plaintextKey, 'ABCDEFGH', 'org-test', keyId);
+    config.dataPlaneIdentity.sessionEncryptionKey = `${originalSessionEncryptionKey}=`;
+    const res = response();
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('SELECT s.expires_at > clock_timestamp()')) {
+        return { rows: [{ is_unexpired: true }] };
+      }
+      if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+        session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+        organization_id: 'org-test', key_id: keyId,
+        authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+        encrypted_api_key: encryptedKey, key_delivered_at: null,
+        expires_at: '2030-01-01T00:10:00Z',
+      }] };
+      if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+        email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+        key_id: keyId,
+        key_hash: createHash('sha256').update(plaintextKey).digest('hex'),
+        name: 'cli', scopes: ['platform:read'],
+      }] };
+      return { rows: [] };
+    });
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'd'.repeat(64) } } as unknown as Request,
+      res, db as never
+    )).rejects.toMatchObject({
+      statusCode: 503, code: 'identity_configuration_error',
+    });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it('rejects authorization scope escalation and missing tenant membership', async () => {
