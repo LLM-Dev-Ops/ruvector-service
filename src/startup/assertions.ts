@@ -7,7 +7,11 @@
 import logger from '../utils/logger';
 import { config, configDeprecations } from '../config';
 import { assertValidDimension } from '../clients/vectorSchema';
-import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
+import {
+  parseIdentityCallerPrincipals,
+  parsePrincipalOrgBindings,
+  parseServiceAudience,
+} from '../utils/principalBindings';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
 
 /**
@@ -59,6 +63,13 @@ export function assertDataPlaneIdentity(): void {
   const audience = config.dataPlaneIdentity.serviceAudience;
   if (!audience) {
     throw new Error('FATAL: RUVVECTOR_SERVICE_AUDIENCE is required for tenant-bound data-plane routes.');
+  }
+  try {
+    parseServiceAudience(audience);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Service audience is invalid';
+    const detail = reason.replace(/^Service audience /, '');
+    throw new Error(`FATAL: RUVVECTOR_SERVICE_AUDIENCE ${detail}.`);
   }
 
   try {

@@ -39,6 +39,16 @@ describe('identity provider startup assertions', () => {
   });
 
   it.each([
+    ['whitespace-only', '   '],
+    ['whitespace-padded', ' https://ruvector.test '],
+  ])('rejects a %s service audience', (_case, value) => {
+    config.dataPlaneIdentity.serviceAudience = value;
+    expect(() => assertDataPlaneIdentity()).toThrow(
+      /SERVICE_AUDIENCE must be a non-empty string without surrounding whitespace/
+    );
+  });
+
+  it.each([
     ['principal bindings', 'principalOrgBindings', '{', /PRINCIPAL_ORG_BINDINGS must be valid JSON/],
     ['identity callers', 'identityCallerPrincipals', '{', /IDENTITY_CALLER_PRINCIPALS must be valid JSON/],
     ['scope configuration', 'allowedScopes', '{', /scope configuration must be valid JSON/],

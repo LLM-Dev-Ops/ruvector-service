@@ -18,10 +18,12 @@ function request(payload: Record<string, unknown>): Request {
 describe('tenant-bound data-plane identity', () => {
   const originalBindings = config.dataPlaneIdentity.principalOrgBindings;
   const originalCallers = config.dataPlaneIdentity.identityCallerPrincipals;
+  const originalAudience = config.dataPlaneIdentity.serviceAudience;
 
   afterEach(() => {
     config.dataPlaneIdentity.principalOrgBindings = originalBindings;
     config.dataPlaneIdentity.identityCallerPrincipals = originalCallers;
+    config.dataPlaneIdentity.serviceAudience = originalAudience;
   });
 
   it('derives organization scope from the configured IAM principal binding', () => {
@@ -148,6 +150,22 @@ describe('tenant-bound data-plane identity', () => {
     ['malformed principal keys', '{"not-an-email":"org-a"}'],
   ])('fails closed at request time for %s', (_case, bindings) => {
     config.dataPlaneIdentity.principalOrgBindings = bindings;
+    const req = request({
+      aud: 'https://ruvector.test', email: 'platform@test.example', sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 503,
+      code: 'identity_configuration_error',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it('fails closed at request time for a non-canonical service audience', () => {
+    config.dataPlaneIdentity.serviceAudience = ' https://ruvector.test ';
     const req = request({
       aud: 'https://ruvector.test', email: 'platform@test.example', sub: 'iam-subject-1',
     });

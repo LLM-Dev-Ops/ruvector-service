@@ -1,3 +1,14 @@
+export function parseServiceAudience(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.trim() !== value
+  ) {
+    throw new Error('Service audience must be a non-empty string without surrounding whitespace');
+  }
+  return value;
+}
+
 export function parsePrincipalOrgBindings(value: string): Record<string, string> {
   let parsed: unknown;
   try {

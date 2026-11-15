@@ -3,7 +3,11 @@ import { DataPlanePrincipalSchema, type DataPlanePrincipal } from '@llm-dev-ops/
 import { z } from 'zod';
 import { config } from '../config';
 import { AppError } from './errorHandler';
-import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
+import {
+  parseIdentityCallerPrincipals,
+  parsePrincipalOrgBindings,
+  parseServiceAudience,
+} from '../utils/principalBindings';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -25,6 +29,7 @@ interface CloudRunClaims {
 interface VerifiedIamClaims {
   email: string;
   sub: string;
+  audience: string;
 }
 
 const TransportPrincipalEmailSchema = z.string().email().refine(
@@ -57,13 +62,21 @@ function decodeClaims(token: string): CloudRunClaims {
 }
 
 function requireIamClaims(req: Request): VerifiedIamClaims {
+  let audience: string;
+  try {
+    audience = parseServiceAudience(config.dataPlaneIdentity.serviceAudience);
+  } catch (error) {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      error instanceof Error ? error.message : 'Service audience is invalid'
+    );
+  }
   const claims = decodeClaims(bearerToken(req));
-  const audience = config.dataPlaneIdentity.serviceAudience;
   const audiences = typeof claims.aud === 'string'
     ? [claims.aud]
     : Array.isArray(claims.aud) ? claims.aud : [];
   if (
-    !audience ||
     audiences.length === 0 ||
     audiences.some((entry) =>
       typeof entry !== 'string' || entry.length === 0 || entry.trim() !== entry
@@ -82,7 +95,7 @@ function requireIamClaims(req: Request): VerifiedIamClaims {
   ) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token lacks principal claims');
   }
-  return { email: email.data.toLowerCase(), sub: claims.sub };
+  return { email: email.data.toLowerCase(), sub: claims.sub, audience };
 }
 
 function identityCallerPrincipals(): Set<string> {
@@ -112,7 +125,6 @@ function principalBindings(): Record<string, string> {
 export function requireDataPlaneTenant(req: Request, _res: Response, next: NextFunction): void {
   try {
     const claims = requireIamClaims(req);
-    const audience = config.dataPlaneIdentity.serviceAudience;
     const organization = principalBindings()[claims.email];
     if (!organization) {
       throw new AppError(403, 'principal_not_mapped', 'Authenticated principal has no organization binding');
@@ -122,7 +134,7 @@ export function requireDataPlaneTenant(req: Request, _res: Response, next: NextF
       subject: claims.sub,
       principal: claims.email,
       organization_id: organization,
-      audience,
+      audience: claims.audience,
       mapping_source: 'configured_principal_binding',
     });
     next();
@@ -140,7 +152,7 @@ export function requireIdentityProviderCaller(req: Request, _res: Response, next
     req.identityProviderCaller = {
       subject: claims.sub,
       principal: claims.email,
-      audience: config.dataPlaneIdentity.serviceAudience,
+      audience: claims.audience,
     };
     next();
   } catch (error) {
