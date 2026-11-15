@@ -8,6 +8,7 @@ import {
   parsePrincipalOrgBindings,
   parseServiceAudience,
 } from '../utils/principalBindings';
+import { readSingleHeader } from '../utils/httpHeaders';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -38,8 +39,12 @@ const TransportPrincipalEmailSchema = z.string().email().refine(
 );
 
 function bearerToken(req: Request): string {
-  const header = req.headers['x-serverless-authorization'] ?? req.headers.authorization;
-  if (Array.isArray(header) || typeof header !== 'string' || !header.startsWith('Bearer ')) {
+  const serverlessAuthorization = readSingleHeader(req, 'x-serverless-authorization');
+  const selected = serverlessAuthorization.present
+    ? serverlessAuthorization
+    : readSingleHeader(req, 'authorization');
+  const header = selected.value;
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM bearer identity is required');
   }
   const token = header.slice('Bearer '.length);

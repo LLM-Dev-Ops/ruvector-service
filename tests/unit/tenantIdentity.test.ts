@@ -144,6 +144,31 @@ describe('tenant-bound data-plane identity', () => {
   });
 
   it.each([
+    ['duplicate raw X-Serverless-Authorization credentials', 'x-serverless-authorization'],
+    ['duplicate raw Authorization credentials', 'authorization'],
+  ])('rejects %s before principal binding', (_case, headerName) => {
+    const iam = token({
+      aud: 'https://ruvector.test', email: 'platform@test.example', sub: 'iam-subject-1',
+    });
+    const canonicalName = headerName === 'authorization'
+      ? 'Authorization'
+      : 'X-Serverless-Authorization';
+    const req = {
+      headers: { [headerName]: `Bearer ${iam}` },
+      rawHeaders: [canonicalName, `Bearer ${iam}`, canonicalName, `Bearer ${iam}`],
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it.each([
     ['case-insensitive duplicate principals', '{"Platform@test.example":"org-a","platform@test.example":"org-b"}'],
     ['non-string organization identifiers', '{"platform@test.example":42}'],
     ['empty organization identifiers', '{"platform@test.example":""}'],

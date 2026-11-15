@@ -16,6 +16,7 @@ import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { VerifiedEndUser, verifyEndUserJwt } from '../utils/identityJwt';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
+import { readSingleHeader } from '../utils/httpHeaders';
 
 interface ApiKeyRow {
   key_id: string;
@@ -199,8 +200,8 @@ function decryptApiKey(
 }
 
 function endUserToken(req: Request): string {
-  const header = req.headers.authorization;
-  if (Array.isArray(header) || typeof header !== 'string' || !header.startsWith('Bearer ')) {
+  const header = readSingleHeader(req, 'authorization').value;
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
     throw new AppError(401, 'end_user_authentication_required', 'End-user JWT is required');
   }
   const token = header.slice('Bearer '.length);

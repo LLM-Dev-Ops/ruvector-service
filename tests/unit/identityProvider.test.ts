@@ -883,6 +883,24 @@ describe('IAM-scoped identity provider', () => {
     expect(db.getClient).not.toHaveBeenCalled();
   });
 
+  it('rejects duplicate raw authorization credentials before identity verification', async () => {
+    const verify = jest.fn().mockResolvedValue({
+      issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null,
+    });
+    const db = { getClient: jest.fn() };
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer jwt-one' },
+      rawHeaders: ['Authorization', 'Bearer jwt-one', 'Authorization', 'Bearer jwt-two'],
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'end_user_authentication_required',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
   it('rejects route/body session mismatch before user verification', async () => {
     const verify = jest.fn();
     await expect(authorizeCliSessionHandler({
