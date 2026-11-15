@@ -163,6 +163,22 @@ describe('end-user identity JWT verification', () => {
     await expect(verifyEndUserJwt(withoutEmail)).resolves.toMatchObject({ email: null });
   });
 
+  it.each([
+    ['a non-string email', 42],
+    ['an empty email', ''],
+    ['a malformed email', 'not-an-email'],
+    ['a whitespace-padded email', ' owner@example.test '],
+  ])('rejects a correctly signed token with %s', async (_case, email) => {
+    const malformedEmail = jwt.sign({ email }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', audience: 'authenticated', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(malformedEmail)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
   it('rejects a token without a subject claim', async () => {
     const withoutSubject = jwt.sign({}, privateKey, {
       algorithm: 'ES256', keyid: 'test-key',

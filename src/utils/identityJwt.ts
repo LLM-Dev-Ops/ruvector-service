@@ -1,5 +1,6 @@
 import jwt, { JwtHeader, JwtPayload, SigningKeyCallback } from 'jsonwebtoken';
 import jwksClient, { JwksClient } from 'jwks-rsa';
+import { z } from 'zod';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 
@@ -11,6 +12,11 @@ export interface VerifiedEndUser {
 
 let client: JwksClient | undefined;
 let clientUri: string | undefined;
+
+const EndUserEmailSchema = z.string().email().refine(
+  (value) => value.trim() === value,
+  'Email must not contain surrounding whitespace'
+);
 
 function signingClient(): JwksClient {
   if (!client || clientUri !== config.dataPlaneIdentity.jwksUri) {
@@ -82,9 +88,15 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
   ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid authorized party');
   }
+  const email = payload.email === undefined
+    ? null
+    : EndUserEmailSchema.safeParse(payload.email);
+  if (email !== null && !email.success) {
+    throw new AppError(401, 'invalid_end_user_token', 'End-user identity token has an invalid email claim');
+  }
   return {
     issuer: payload.iss,
     subject: payload.sub,
-    email: typeof payload.email === 'string' ? payload.email.toLowerCase() : null,
+    email: email === null ? null : email.data.toLowerCase(),
   };
 }
