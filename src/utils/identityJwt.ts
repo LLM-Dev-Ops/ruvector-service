@@ -54,7 +54,11 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token is invalid or expired');
   });
 
-  if (!payload.sub || payload.iss !== config.dataPlaneIdentity.jwtIssuer) {
+  if (
+    typeof payload.sub !== 'string' || payload.sub.length === 0 ||
+    payload.iss !== config.dataPlaneIdentity.jwtIssuer ||
+    typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0
+  ) {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token lacks required claims');
   }
   return {

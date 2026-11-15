@@ -99,4 +99,26 @@ describe('end-user identity JWT verification', () => {
       code: 'invalid_end_user_token',
     });
   });
+
+  it('rejects a correctly signed token without an expiration claim', async () => {
+    const withoutExpiration = jwt.sign({ email: 'owner@example.test' }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', audience: 'authenticated',
+    });
+    await expect(verifyEndUserJwt(withoutExpiration)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
+  it('rejects a correctly signed token with a non-string subject', async () => {
+    const malformedSubject = jwt.sign({ sub: 42 }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key',
+      issuer: 'https://identity.test/auth/v1', audience: 'authenticated', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(malformedSubject)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
 });
