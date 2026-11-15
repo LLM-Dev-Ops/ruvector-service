@@ -127,6 +127,30 @@ describe('end-user identity JWT verification', () => {
     }))).rejects.toMatchObject({ statusCode: 401, code: 'invalid_end_user_token' });
   });
 
+  it.each([
+    ['a non-string key id', 42],
+    ['a whitespace-padded key id', ' test-key '],
+  ])('rejects signing metadata with %s before JWKS lookup', async (caseName, kid) => {
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = `https://identity.test/${caseName.replaceAll(' ', '-')}-jwks`;
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+    try {
+      await expect(verifyEndUserJwt(unsignedMetadataToken(
+        { alg: 'ES256', typ: 'JWT', kid },
+        {
+          iss: 'https://identity.test/auth/v1',
+          sub: 'user-1',
+          aud: 'authenticated',
+          exp: Math.floor(Date.now() / 1000) + 300,
+        },
+      ))).rejects.toMatchObject({ statusCode: 401, code: 'invalid_end_user_token' });
+      expect(getSigningKey).not.toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
+  });
+
   it('rejects a correctly signed token with an unsupported critical header', async () => {
     const unsupportedCriticalHeader = jwt.sign({ email: 'owner@example.test' }, privateKey, {
       algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
