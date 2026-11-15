@@ -235,4 +235,18 @@ describe('end-user identity JWT verification', () => {
       code: 'invalid_end_user_token',
     });
   });
+
+  it.each([
+    ['a whitespace-only subject', '   '],
+    ['a whitespace-padded subject', ' user-1 '],
+  ])('rejects a correctly signed token with %s', async (_case, sub) => {
+    const malformedSubject = jwt.sign({ sub }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key',
+      issuer: 'https://identity.test/auth/v1', audience: 'authenticated', expiresIn: '5m',
+    });
+    await expect(verifyEndUserJwt(malformedSubject)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
 });

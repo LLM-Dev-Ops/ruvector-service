@@ -68,6 +68,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
 
   if (
     typeof payload.sub !== 'string' || payload.sub.length === 0 ||
+    payload.sub.trim() !== payload.sub ||
     payload.iss !== config.dataPlaneIdentity.jwtIssuer ||
     typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0
   ) {
