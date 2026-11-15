@@ -79,6 +79,28 @@ describe('tenant-bound data-plane identity', () => {
     expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
+  it.each([
+    ['a non-string principal email', { email: 42, sub: 'iam-subject-1' }],
+    ['an empty principal email', { email: '', sub: 'iam-subject-1' }],
+    ['a malformed principal email', { email: 'not-an-email', sub: 'iam-subject-1' }],
+    ['a whitespace-padded principal email', { email: ' platform@test.example', sub: 'iam-subject-1' }],
+    ['a non-string principal subject', { email: 'platform@test.example', sub: 42 }],
+    ['an empty principal subject', { email: 'platform@test.example', sub: '' }],
+    ['a whitespace-only principal subject', { email: 'platform@test.example', sub: '   ' }],
+    ['a whitespace-padded principal subject', { email: 'platform@test.example', sub: ' iam-subject-1' }],
+  ])('rejects transport identity with %s before principal binding', (_case, identity) => {
+    const req = request({ aud: 'https://ruvector.test', ...identity });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('requires a Cloud Run IAM bearer identity', () => {
     const next = jest.fn() as NextFunction;
 

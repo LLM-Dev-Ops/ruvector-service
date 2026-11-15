@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { DataPlanePrincipalSchema, type DataPlanePrincipal } from '@llm-dev-ops/contracts';
+import { z } from 'zod';
 import { config } from '../config';
 import { AppError } from './errorHandler';
 import { parseIdentityCallerPrincipals, parsePrincipalOrgBindings } from '../utils/principalBindings';
@@ -16,15 +17,20 @@ declare module 'express-serve-static-core' {
 }
 
 interface CloudRunClaims {
-  aud?: string | string[];
-  email?: string;
-  sub?: string;
+  aud?: unknown;
+  email?: unknown;
+  sub?: unknown;
 }
 
 interface VerifiedIamClaims {
   email: string;
   sub: string;
 }
+
+const TransportPrincipalEmailSchema = z.string().email().refine(
+  (value) => value.trim() === value,
+  'Principal email must not contain surrounding whitespace'
+);
 
 function bearerToken(req: Request): string {
   const header = req.headers['x-serverless-authorization'] ?? req.headers.authorization;
@@ -67,10 +73,16 @@ function requireIamClaims(req: Request): VerifiedIamClaims {
   ) {
     throw new AppError(401, 'invalid_audience', 'Cloud Run IAM identity token audience does not match this service');
   }
-  if (!claims.email || !claims.sub) {
+  const email = TransportPrincipalEmailSchema.safeParse(claims.email);
+  if (
+    !email.success ||
+    typeof claims.sub !== 'string' ||
+    claims.sub.length === 0 ||
+    claims.sub.trim() !== claims.sub
+  ) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token lacks principal claims');
   }
-  return { email: claims.email.toLowerCase(), sub: claims.sub };
+  return { email: email.data.toLowerCase(), sub: claims.sub };
 }
 
 function identityCallerPrincipals(): Set<string> {
