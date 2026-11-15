@@ -28,7 +28,11 @@ function signingClient(): JwksClient {
 }
 
 function signingKey(header: JwtHeader, callback: SigningKeyCallback): void {
-  if (header.alg !== 'ES256' || !header.kid) {
+  if (
+    header.alg !== 'ES256' ||
+    !header.kid ||
+    Object.prototype.hasOwnProperty.call(header, 'crit')
+  ) {
     callback(new Error('JWT signing metadata is invalid'));
     return;
   }

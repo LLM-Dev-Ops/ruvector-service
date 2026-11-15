@@ -127,6 +127,18 @@ describe('end-user identity JWT verification', () => {
     }))).rejects.toMatchObject({ statusCode: 401, code: 'invalid_end_user_token' });
   });
 
+  it('rejects a correctly signed token with an unsupported critical header', async () => {
+    const unsupportedCriticalHeader = jwt.sign({ email: 'owner@example.test' }, privateKey, {
+      algorithm: 'ES256', keyid: 'test-key', subject: 'user-1',
+      issuer: 'https://identity.test/auth/v1', audience: 'authenticated', expiresIn: '5m',
+      header: { crit: ['tenant-binding'], 'tenant-binding': 'external' } as never,
+    });
+    await expect(verifyEndUserJwt(unsupportedCriticalHeader)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+  });
+
   it('fails closed when the JWKS lookup fails', async () => {
     const originalUri = config.dataPlaneIdentity.jwksUri;
     config.dataPlaneIdentity.jwksUri = 'https://identity.test/rotated-jwks';
