@@ -70,6 +70,35 @@ describe('tenant-bound data-plane identity', () => {
   });
 
   it.each([
+    ['duplicate X-Serverless-Authorization credentials', (iam: string) => ({
+      'x-serverless-authorization': [`Bearer ${iam}`, `Bearer ${iam}`],
+    })],
+    ['duplicate Authorization credentials', (iam: string) => ({
+      authorization: [`Bearer ${iam}`, `Bearer ${iam}`],
+    })],
+    ['a whitespace-padded X-Serverless-Authorization credential', (iam: string) => ({
+      'x-serverless-authorization': `Bearer ${iam} `,
+    })],
+    ['a whitespace-padded Authorization credential', (iam: string) => ({
+      authorization: `Bearer ${iam} `,
+    })],
+  ])('rejects %s before principal binding', (_case, headers) => {
+    const iam = token({
+      aud: 'https://ruvector.test', email: 'platform@test.example', sub: 'iam-subject-1',
+    });
+    const req = { headers: headers(iam) } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it.each([
     ['case-insensitive duplicate principals', '{"Platform@test.example":"org-a","platform@test.example":"org-b"}'],
     ['non-string organization identifiers', '{"platform@test.example":42}'],
     ['empty organization identifiers', '{"platform@test.example":""}'],

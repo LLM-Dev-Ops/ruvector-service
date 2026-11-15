@@ -28,11 +28,14 @@ interface VerifiedIamClaims {
 
 function bearerToken(req: Request): string {
   const header = req.headers['x-serverless-authorization'] ?? req.headers.authorization;
-  const value = Array.isArray(header) ? header[0] : header;
-  if (!value?.startsWith('Bearer ')) {
+  if (Array.isArray(header) || typeof header !== 'string' || !header.startsWith('Bearer ')) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM bearer identity is required');
   }
-  return value.slice('Bearer '.length);
+  const token = header.slice('Bearer '.length);
+  if (token.length === 0 || token.trim() !== token) {
+    throw new AppError(401, 'unauthenticated', 'Cloud Run IAM bearer identity is required');
+  }
+  return token;
 }
 
 function decodeClaims(token: string): CloudRunClaims {
