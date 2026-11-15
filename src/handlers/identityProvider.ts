@@ -198,11 +198,16 @@ function decryptApiKey(
   const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), parts[0]);
   decipher.setAAD(deliveryBinding(sessionCode, organizationId, keyId));
   decipher.setAuthTag(parts[1]);
+  let plaintext: string;
   try {
-    return Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString('utf8');
+    plaintext = Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString('utf8');
   } catch {
     throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope cannot be authenticated');
   }
+  if (plaintext.length === 0) {
+    throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope contains an empty API key');
+  }
+  return plaintext;
 }
 
 function endUserToken(req: Request): string {
@@ -733,7 +738,7 @@ export async function pollCliSessionHandler(
         session.key_id
       )
       : undefined;
-    if (plaintextKey) {
+    if (plaintextKey !== undefined) {
       const plaintextHash = sha256(plaintextKey);
       if (!activeKey || !/^[a-f0-9]{64}$/.test(activeKey.key_hash) ||
           !timingSafeEqual(Buffer.from(plaintextHash, 'hex'), Buffer.from(activeKey.key_hash, 'hex'))) {
@@ -750,13 +755,13 @@ export async function pollCliSessionHandler(
     await assertCliSessionUnexpired(client, session.session_code);
     const completedResponse = IdentityCliSessionPollSchema.parse({
       status: 'completed',
-      ...(plaintextKey ? { api_key: plaintextKey } : {}),
+      ...(plaintextKey !== undefined ? { api_key: plaintextKey } : {}),
       email: membership.email,
       payment_status: membership.payment_status,
       organization_id: session.organization_id,
       role: membership.role,
     });
-    if (plaintextKey) {
+    if (plaintextKey !== undefined) {
       await client.query(
         `UPDATE data_plane_cli_sessions
             SET encrypted_api_key = NULL, key_delivered_at = NOW()
