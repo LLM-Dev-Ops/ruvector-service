@@ -13,7 +13,10 @@ import {
   parseServiceAudience,
 } from '../utils/principalBindings';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
-import { parseEndUserJwtConfiguration } from '../utils/identityJwtConfiguration';
+import {
+  parseEndUserJwtConfiguration,
+  parseVerificationUrlConfiguration,
+} from '../utils/identityJwtConfiguration';
 
 /**
  * Required environment variables for production operation.
@@ -107,15 +110,11 @@ export function assertDataPlaneIdentity(): void {
     const reason = error instanceof Error ? error.message : 'JWT verification configuration is invalid';
     throw new Error(`FATAL: ${reason}.`);
   }
-  for (const [name, value] of [
-    ['RUVVECTOR_IDENTITY_VERIFICATION_URL', config.dataPlaneIdentity.verificationUrl],
-  ] as const) {
-    try {
-      const url = new URL(value);
-      if (url.protocol !== 'https:') throw new Error('not https');
-    } catch {
-      throw new Error(`FATAL: ${name} must be an HTTPS URL.`);
-    }
+  try {
+    parseVerificationUrlConfiguration(config.dataPlaneIdentity.verificationUrl);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'CLI verification URL is invalid';
+    throw new Error(`FATAL: ${reason}.`);
   }
 
   const encryptionKey = Buffer.from(config.dataPlaneIdentity.sessionEncryptionKey, 'base64');

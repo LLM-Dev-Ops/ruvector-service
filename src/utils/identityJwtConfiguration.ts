@@ -4,6 +4,16 @@ export interface EndUserJwtConfiguration {
   jwksUri: string;
 }
 
+export function parseVerificationUrlConfiguration(value: unknown): string {
+  try {
+    return parseHttpsUrl(value, 'CLI verification URL', false);
+  } catch {
+    throw new Error(
+      'CLI verification URL must be an HTTPS URL; use a canonical HTTPS URL without surrounding whitespace, credentials, query, or fragment'
+    );
+  }
+}
+
 function parseHttpsUrl(value: unknown, name: string, allowQuery: boolean): string {
   if (
     typeof value !== 'string' ||

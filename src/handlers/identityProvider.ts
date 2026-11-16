@@ -15,6 +15,7 @@ import { DatabaseClient } from '../clients/DatabaseClient';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { VerifiedEndUser, verifyEndUserJwt } from '../utils/identityJwt';
+import { parseVerificationUrlConfiguration } from '../utils/identityJwtConfiguration';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
 import { readSingleHeader } from '../utils/httpHeaders';
 
@@ -418,6 +419,16 @@ export async function createCliSessionHandler(
   if (!parsed.success) {
     throw new AppError(400, 'validation_error', 'CLI session request is invalid', parsed.error.issues);
   }
+  let verificationUrl: string;
+  try {
+    verificationUrl = parseVerificationUrlConfiguration(config.dataPlaneIdentity.verificationUrl);
+  } catch {
+    throw new AppError(
+      503,
+      'identity_configuration_error',
+      'CLI verification URL configuration is invalid'
+    );
+  }
   const scopes = requestedScopes(parsed.data.scopes);
   const code = sessionCode();
   const deviceCode = randomBytes(32).toString('hex');
@@ -442,7 +453,7 @@ export async function createCliSessionHandler(
         RETURNING expires_at`,
       [code]
     );
-    const verification = new URL(config.dataPlaneIdentity.verificationUrl);
+    const verification = new URL(verificationUrl);
     verification.searchParams.set('code', code);
     const response = IdentityCliSessionCreatedSchema.parse({
       session_code: code,

@@ -50,11 +50,13 @@ describe('IAM-scoped identity provider', () => {
   const originalAllowedScopes = config.dataPlaneIdentity.allowedScopes;
   const originalDefaultScopes = config.dataPlaneIdentity.defaultScopes;
   const originalSessionEncryptionKey = config.dataPlaneIdentity.sessionEncryptionKey;
+  const originalVerificationUrl = config.dataPlaneIdentity.verificationUrl;
 
   afterEach(() => {
     config.dataPlaneIdentity.allowedScopes = originalAllowedScopes;
     config.dataPlaneIdentity.defaultScopes = originalDefaultScopes;
     config.dataPlaneIdentity.sessionEncryptionKey = originalSessionEncryptionKey;
+    config.dataPlaneIdentity.verificationUrl = originalVerificationUrl;
   });
 
   it('resolves tenant ownership from an active API-key hash without exposing the hash', async () => {
@@ -297,6 +299,20 @@ describe('IAM-scoped identity provider', () => {
     expect(client.query).toHaveBeenCalledWith('BEGIN ISOLATION LEVEL SERIALIZABLE');
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(client.release).toHaveBeenCalled();
+  });
+
+  it('rejects ambiguous verification URL configuration before persistence access', async () => {
+    config.dataPlaneIdentity.verificationUrl = 'https://user:password@platform.test/cli/auth';
+    const { db } = transactionalDb(async () => ({ rows: [] }));
+
+    await expect(createCliSessionHandler({ body: {
+      cli_name: 'agentics-cli', scopes: ['platform:read'],
+    } } as Request, response(), db as never)).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'identity_configuration_error',
+    });
+
+    expect(db.getClient).not.toHaveBeenCalled();
   });
 
   it('rolls back a provisional CLI session when the create response is invalid', async () => {

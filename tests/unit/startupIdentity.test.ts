@@ -59,6 +59,18 @@ describe('identity provider startup assertions', () => {
   });
 
   it.each([
+    ['surrounding whitespace', ' https://platform.test/cli/auth '],
+    ['an explicit default port', 'https://platform.test:443/cli/auth'],
+    ['path dot segments', 'https://platform.test/cli/../cli/auth'],
+    ['embedded credentials', 'https://user:password@platform.test/cli/auth'],
+    ['a query', 'https://platform.test/cli/auth?source=cli'],
+    ['a fragment', 'https://platform.test/cli/auth#authorize'],
+  ])('rejects a verification URL with %s', (_case, value) => {
+    config.dataPlaneIdentity.verificationUrl = value;
+    expect(() => assertDataPlaneIdentity()).toThrow(/canonical HTTPS URL/);
+  });
+
+  it.each([
     ['principal bindings', 'principalOrgBindings', '{', /PRINCIPAL_ORG_BINDINGS must be valid JSON/],
     ['identity callers', 'identityCallerPrincipals', '{', /IDENTITY_CALLER_PRINCIPALS must be valid JSON/],
     ['scope configuration', 'allowedScopes', '{', /scope configuration must be valid JSON/],
