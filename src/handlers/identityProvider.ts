@@ -730,7 +730,7 @@ export async function pollCliSessionHandler(
     if (!activeKey) {
       throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
     }
-    const plaintextKey = session.encrypted_api_key
+    const plaintextKey = session.encrypted_api_key !== null
       ? decryptApiKey(
         session.encrypted_api_key,
         session.session_code,
