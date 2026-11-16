@@ -14,9 +14,11 @@ function parseHttpsUrl(value: unknown, name: string): string {
   }
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:') throw new Error('not https');
+    if (url.protocol !== 'https:' || url.toString() !== value) {
+      throw new Error('not canonical https');
+    }
   } catch {
-    throw new Error(`${name} must be an HTTPS URL without surrounding whitespace`);
+    throw new Error(`${name} must be an HTTPS URL in canonical serialization without surrounding whitespace`);
   }
   return value;
 }

@@ -90,8 +90,12 @@ describe('end-user identity JWT verification', () => {
 
   it.each([
     ['JWT issuer', 'jwtIssuer', ' https://identity.test/auth/v1 '],
+    ['JWT issuer with an explicit default port', 'jwtIssuer', 'https://identity.test:443/auth/v1'],
+    ['JWT issuer with path dot segments', 'jwtIssuer', 'https://identity.test/auth/../auth/v1'],
     ['JWT audience', 'jwtAudience', ' authenticated '],
     ['JWKS URI', 'jwksUri', ' https://identity.test/.well-known/jwks.json '],
+    ['JWKS URI with an explicit default port', 'jwksUri', 'https://identity.test:443/.well-known/jwks.json'],
+    ['JWKS URI with path dot segments', 'jwksUri', 'https://identity.test/keys/../.well-known/jwks.json'],
   ])('fails closed for non-canonical %s configuration before verification', async (
     _case,
     field,
