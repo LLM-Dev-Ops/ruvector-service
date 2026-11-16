@@ -1,12 +1,16 @@
 import { assertUniqueTopLevelJsonMembers } from './jsonMembers';
+import { isWellFormedUnicode } from './utf8';
 
 export function parseServiceAudience(value: unknown): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    value.trim() !== value
+    value.trim() !== value ||
+    !isWellFormedUnicode(value)
   ) {
-    throw new Error('Service audience must be a non-empty string without surrounding whitespace');
+    throw new Error(
+      'Service audience must be a non-empty string without surrounding whitespace and contain only Unicode scalar values'
+    );
   }
   return value;
 }
@@ -30,14 +34,27 @@ export function parsePrincipalOrgBindings(value: string): Record<string, string>
   const result: Record<string, string> = {};
   for (const [principal, organization] of Object.entries(parsed)) {
     const canonicalPrincipal = principal.toLowerCase();
-    if (principal.trim() !== principal || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal)) {
-      throw new Error('Principal binding keys must be email addresses without surrounding whitespace');
+    if (
+      principal.trim() !== principal ||
+      !isWellFormedUnicode(principal) ||
+      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal)
+    ) {
+      throw new Error(
+        'Principal binding keys must be email addresses without surrounding whitespace and contain only Unicode scalar values'
+      );
     }
     if (Object.prototype.hasOwnProperty.call(result, canonicalPrincipal)) {
       throw new Error('Principal binding keys must be unique ignoring case');
     }
-    if (typeof organization !== 'string' || organization.length === 0 || organization.trim() !== organization) {
-      throw new Error('Principal binding organization identifiers must be non-empty strings without surrounding whitespace');
+    if (
+      typeof organization !== 'string' ||
+      organization.length === 0 ||
+      organization.trim() !== organization ||
+      !isWellFormedUnicode(organization)
+    ) {
+      throw new Error(
+        'Principal binding organization identifiers must be non-empty strings without surrounding whitespace and contain only Unicode scalar values'
+      );
     }
     result[canonicalPrincipal] = organization;
   }
@@ -61,9 +78,12 @@ export function parseIdentityCallerPrincipals(value: string): Set<string> {
     if (
       typeof principal !== 'string' ||
       principal.trim() !== principal ||
+      !isWellFormedUnicode(principal) ||
       !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal)
     ) {
-      throw new Error('Identity caller principals must be email addresses without surrounding whitespace');
+      throw new Error(
+        'Identity caller principals must be email addresses without surrounding whitespace and contain only Unicode scalar values'
+      );
     }
     const canonicalPrincipal = principal.toLowerCase();
     if (result.has(canonicalPrincipal)) {

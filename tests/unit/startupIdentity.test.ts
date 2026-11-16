@@ -99,9 +99,19 @@ describe('identity provider startup assertions', () => {
     ['non-string default scope', 'defaultScopes', '[1]', /non-empty strings/],
     ['whitespace-padded default scope', 'defaultScopes', '["platform:read "]', /without surrounding whitespace/],
     ['duplicate default scope', 'defaultScopes', '["platform:read","platform:read"]', /must be unique/],
+    ['unpaired-surrogate service audience', 'serviceAudience', '\ud800', /Unicode scalar values/],
+    ['unpaired-surrogate principal binding key', 'principalOrgBindings', '{"\\ud800@test.example":"org-a"}', /Unicode scalar values/],
+    ['unpaired-surrogate organization binding', 'principalOrgBindings', '{"platform@test.example":"\\ud800"}', /Unicode scalar values/],
+    ['unpaired-surrogate identity caller', 'identityCallerPrincipals', '["\\ud800@test.example"]', /Unicode scalar values/],
   ])('rejects %s', (_label, field, value, expected) => {
     (config.dataPlaneIdentity as unknown as Record<string, string>)[field] = value;
     expect(() => assertDataPlaneIdentity()).toThrow(expected);
+  });
+
+  it('rejects an unpaired-surrogate identity scope even when both lists match', () => {
+    config.dataPlaneIdentity.allowedScopes = '["\\ud800"]';
+    config.dataPlaneIdentity.defaultScopes = '["\\ud800"]';
+    expect(() => assertDataPlaneIdentity()).toThrow(/Unicode scalar values/);
   });
 
   it.each(['jwtIssuer', 'jwksUri', 'verificationUrl'])('rejects an invalid %s URL', (field) => {

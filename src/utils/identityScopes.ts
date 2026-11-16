@@ -1,3 +1,5 @@
+import { isWellFormedUnicode } from './utf8';
+
 export interface IdentityScopeConfiguration {
   allowed: string[];
   defaults: string[];
@@ -14,9 +16,14 @@ function parseScopeList(value: string, name: string): string[] {
     throw new Error(`${name} must contain at least one scope`);
   }
   if (parsed.some((scope) =>
-    typeof scope !== 'string' || scope.length === 0 || scope.trim() !== scope
+    typeof scope !== 'string' ||
+    scope.length === 0 ||
+    scope.trim() !== scope ||
+    !isWellFormedUnicode(scope)
   )) {
-    throw new Error(`${name} entries must be non-empty strings without surrounding whitespace`);
+    throw new Error(
+      `${name} entries must be non-empty strings without surrounding whitespace and contain only Unicode scalar values`
+    );
   }
   if (new Set(parsed).size !== parsed.length) {
     throw new Error(`${name} entries must be unique`);

@@ -893,6 +893,19 @@ describe('IAM-scoped identity provider', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 
+  it('fails closed at request time for matching unpaired-surrogate scope configuration', async () => {
+    config.dataPlaneIdentity.allowedScopes = '["\\ud800"]';
+    config.dataPlaneIdentity.defaultScopes = '["\\ud800"]';
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: {} } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 503, code: 'identity_configuration_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['duplicate', ['platform:read', 'platform:read']],
     ['empty', []],

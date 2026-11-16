@@ -119,6 +119,31 @@ describe('tenant-bound data-plane identity', () => {
   });
 
   it.each([
+    ['service audience', 'serviceAudience', '\ud800'],
+    ['organization binding', 'principalOrgBindings', '{"platform@test.example":"\\ud800"}'],
+  ])('rejects unpaired-surrogate %s configuration before principal emission', (
+    _case,
+    field,
+    value,
+  ) => {
+    (config.dataPlaneIdentity as unknown as Record<string, string>)[field] = value;
+    const req = request({
+      aud: field === 'serviceAudience' ? '\ud800' : 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 503,
+      code: 'identity_configuration_error',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it.each([
     ['null', null],
     ['an array', []],
     ['a string', 'claims'],
@@ -462,6 +487,7 @@ describe('tenant-bound data-plane identity', () => {
     ['non-string organization identifiers', '{"platform@test.example":42}'],
     ['empty organization identifiers', '{"platform@test.example":""}'],
     ['malformed principal keys', '{"not-an-email":"org-a"}'],
+    ['unpaired-surrogate principal keys', '{"\\ud800@test.example":"org-a"}'],
   ])('fails closed at request time for %s', (_case, bindings) => {
     config.dataPlaneIdentity.principalOrgBindings = bindings;
     const req = request({
@@ -551,6 +577,7 @@ describe('tenant-bound data-plane identity', () => {
     ['whitespace-padded callers', '[" platform@test.example"]'],
     ['malformed callers', '["not-an-email"]'],
     ['non-string callers', '[42]'],
+    ['unpaired-surrogate callers', '["\\ud800@test.example"]'],
   ])('fails closed at request time for %s', (_case, callers) => {
     config.dataPlaneIdentity.identityCallerPrincipals = callers;
     const req = request({
