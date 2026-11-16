@@ -4,7 +4,7 @@ export interface EndUserJwtConfiguration {
   jwksUri: string;
 }
 
-function parseHttpsUrl(value: unknown, name: string): string {
+function parseHttpsUrl(value: unknown, name: string, allowQuery: boolean): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
@@ -14,7 +14,14 @@ function parseHttpsUrl(value: unknown, name: string): string {
   }
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.toString() !== value) {
+    if (
+      url.protocol !== 'https:' ||
+      url.toString() !== value ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.hash !== '' ||
+      (!allowQuery && url.search !== '')
+    ) {
       throw new Error('not canonical https');
     }
   } catch {
@@ -36,8 +43,8 @@ export function parseEndUserJwtConfiguration(value: {
     throw new Error('JWT audience must be a non-empty string without surrounding whitespace');
   }
   return {
-    issuer: parseHttpsUrl(value.issuer, 'JWT issuer'),
+    issuer: parseHttpsUrl(value.issuer, 'JWT issuer', false),
     audience: value.audience,
-    jwksUri: parseHttpsUrl(value.jwksUri, 'JWKS URI'),
+    jwksUri: parseHttpsUrl(value.jwksUri, 'JWKS URI', true),
   };
 }
