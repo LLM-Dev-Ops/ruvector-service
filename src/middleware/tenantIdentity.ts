@@ -56,11 +56,18 @@ function bearerToken(req: Request): string {
 
 function decodeClaims(token: string): CloudRunClaims {
   const segments = token.split('.');
-  if (segments.length !== 3 || !segments[1]) {
+  if (
+    segments.length !== 3 ||
+    segments.some((segment) => segment.length === 0 || !/^[A-Za-z0-9_-]+$/.test(segment))
+  ) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token is malformed');
   }
   try {
-    const decoded: unknown = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+    const payload = Buffer.from(segments[1], 'base64url');
+    if (payload.toString('base64url') !== segments[1]) {
+      throw new Error('JWT payload encoding is not canonical');
+    }
+    const decoded: unknown = JSON.parse(payload.toString('utf8'));
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
       throw new Error('JWT payload is not an object');
     }
