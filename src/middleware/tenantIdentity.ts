@@ -67,6 +67,14 @@ function decodeClaims(token: string): CloudRunClaims {
     if (decodedSegments.some((decoded, index) => decoded.toString('base64url') !== segments[index])) {
       throw new Error('JWT component encoding is not canonical');
     }
+    const protectedHeader: unknown = JSON.parse(decodedSegments[0].toString('utf8'));
+    if (
+      protectedHeader === null ||
+      typeof protectedHeader !== 'object' ||
+      Array.isArray(protectedHeader)
+    ) {
+      throw new Error('JWT protected header is not an object');
+    }
     const payload = decodedSegments[1];
     const decoded: unknown = JSON.parse(payload.toString('utf8'));
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {

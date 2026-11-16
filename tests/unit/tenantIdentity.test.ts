@@ -127,6 +127,32 @@ describe('tenant-bound data-plane identity', () => {
     expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', 'header'],
+    ['a number', 42],
+  ])('rejects %s transport JWT protected header before principal binding', (_case, protectedHeader) => {
+    const header = Buffer.from(JSON.stringify(protectedHeader)).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    })).toString('base64url');
+    const req = {
+      headers: { authorization: `Bearer ${header}.${payload}.unsigned` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('rejects a noncanonical padded transport JWT payload before principal binding', () => {
     const canonical = token({
       aud: 'https://ruvector.test',
