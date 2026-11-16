@@ -10,7 +10,7 @@ import {
 } from '../utils/principalBindings';
 import { readSingleHeader } from '../utils/httpHeaders';
 import { assertUniqueTopLevelJsonMembers } from '../utils/jsonMembers';
-import { decodeStrictUtf8 } from '../utils/utf8';
+import { decodeStrictUtf8, isWellFormedUnicode } from '../utils/utf8';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -86,6 +86,7 @@ function decodeClaims(token: string): CloudRunClaims {
       typeof header.kid !== 'string' ||
       header.kid.length === 0 ||
       header.kid.trim() !== header.kid ||
+      !isWellFormedUnicode(header.kid) ||
       Object.prototype.hasOwnProperty.call(header, 'crit')
     ) {
       throw new Error('JWT protected header metadata is invalid');
@@ -132,7 +133,8 @@ function requireIamClaims(req: Request): VerifiedIamClaims {
     !email.success ||
     typeof claims.sub !== 'string' ||
     claims.sub.length === 0 ||
-    claims.sub.trim() !== claims.sub
+    claims.sub.trim() !== claims.sub ||
+    !isWellFormedUnicode(claims.sub)
   ) {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token lacks principal claims');
   }

@@ -104,6 +104,7 @@ describe('tenant-bound data-plane identity', () => {
     ['an empty principal subject', { email: 'platform@test.example', sub: '' }],
     ['a whitespace-only principal subject', { email: 'platform@test.example', sub: '   ' }],
     ['a whitespace-padded principal subject', { email: 'platform@test.example', sub: ' iam-subject-1' }],
+    ['an unpaired-surrogate principal subject', { email: 'platform@test.example', sub: '\uD800' }],
   ])('rejects transport identity with %s before principal binding', (_case, identity) => {
     const req = request({ aud: 'https://ruvector.test', ...identity });
     const next = jest.fn() as NextFunction;
@@ -171,6 +172,7 @@ describe('tenant-bound data-plane identity', () => {
     ['a missing key identifier', { alg: 'RS256', typ: 'JWT' }],
     ['an empty key identifier', { alg: 'RS256', typ: 'JWT', kid: '' }],
     ['a whitespace-padded key identifier', { alg: 'RS256', typ: 'JWT', kid: ' google-key-1' }],
+    ['an unpaired-surrogate key identifier', { alg: 'RS256', typ: 'JWT', kid: '\uD800' }],
     ['a non-string key identifier', { alg: 'RS256', typ: 'JWT', kid: 42 }],
     ['an unsupported critical-header declaration', {
       alg: 'RS256', typ: 'JWT', kid: 'google-key-1', crit: [],

@@ -8,7 +8,7 @@ import {
   type EndUserJwtConfiguration,
 } from './identityJwtConfiguration';
 import { assertUniqueTopLevelJsonMembers } from './jsonMembers';
-import { decodeStrictUtf8 } from './utf8';
+import { decodeStrictUtf8, isWellFormedUnicode } from './utf8';
 
 export interface VerifiedEndUser {
   issuer: string;
@@ -73,6 +73,7 @@ function signingKey(
     typeof header.kid !== 'string' ||
     header.kid.length === 0 ||
     header.kid.trim() !== header.kid ||
+    !isWellFormedUnicode(header.kid) ||
     Object.prototype.hasOwnProperty.call(header, 'crit')
   ) {
     callback(new Error('JWT signing metadata is invalid'));
@@ -138,6 +139,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
   if (
     typeof payload.sub !== 'string' || payload.sub.length === 0 ||
     payload.sub.trim() !== payload.sub ||
+    !isWellFormedUnicode(payload.sub) ||
     payload.iss !== identityConfiguration.issuer ||
     typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0
   ) {

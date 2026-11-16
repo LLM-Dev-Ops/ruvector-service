@@ -369,6 +369,7 @@ describe('end-user identity JWT verification', () => {
   it.each([
     ['a non-string key id', 42],
     ['a whitespace-padded key id', ' test-key '],
+    ['an unpaired-surrogate key id', '\uD800'],
   ])('rejects signing metadata with %s before JWKS lookup', async (caseName, kid) => {
     const originalUri = config.dataPlaneIdentity.jwksUri;
     config.dataPlaneIdentity.jwksUri = `https://identity.test/${caseName.replaceAll(' ', '-')}-jwks`;
@@ -506,6 +507,7 @@ describe('end-user identity JWT verification', () => {
   it.each([
     ['a whitespace-only subject', '   '],
     ['a whitespace-padded subject', ' user-1 '],
+    ['an unpaired-surrogate subject', '\uD800'],
   ])('rejects a correctly signed token with %s', async (_case, sub) => {
     const malformedSubject = jwt.sign({ sub }, privateKey, {
       algorithm: 'ES256', keyid: 'test-key',
