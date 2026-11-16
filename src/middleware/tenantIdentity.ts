@@ -63,10 +63,11 @@ function decodeClaims(token: string): CloudRunClaims {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token is malformed');
   }
   try {
-    const payload = Buffer.from(segments[1], 'base64url');
-    if (payload.toString('base64url') !== segments[1]) {
-      throw new Error('JWT payload encoding is not canonical');
+    const decodedSegments = segments.map((segment) => Buffer.from(segment, 'base64url'));
+    if (decodedSegments.some((decoded, index) => decoded.toString('base64url') !== segments[index])) {
+      throw new Error('JWT component encoding is not canonical');
     }
+    const payload = decodedSegments[1];
     const decoded: unknown = JSON.parse(payload.toString('utf8'));
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
       throw new Error('JWT payload is not an object');

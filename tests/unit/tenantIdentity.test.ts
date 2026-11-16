@@ -171,6 +171,47 @@ describe('tenant-bound data-plane identity', () => {
     expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
+  it('rejects a noncanonical protected-header component before principal binding', () => {
+    const payload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    })).toString('base64url');
+    const req = {
+      headers: { authorization: `Bearer AB.${payload}.unsigned` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it('rejects a noncanonical signature component before principal binding', () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    })).toString('base64url');
+    const req = {
+      headers: { authorization: `Bearer ${header}.${payload}.AB` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('requires a Cloud Run IAM bearer identity', () => {
     const next = jest.fn() as NextFunction;
 
