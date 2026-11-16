@@ -7,6 +7,7 @@ import {
   parseEndUserJwtConfiguration,
   type EndUserJwtConfiguration,
 } from './identityJwtConfiguration';
+import { assertUniqueTopLevelJsonMembers } from './jsonMembers';
 
 export interface VerifiedEndUser {
   issuer: string;
@@ -58,6 +59,19 @@ function signingKey(
     .catch((error: Error) => callback(error));
 }
 
+function assertUniqueJwtMembers(token: string): void {
+  try {
+    const segments = token.split('.');
+    if (segments.length !== 3 || segments[0].length === 0 || segments[1].length === 0) {
+      throw new Error('JWT compact serialization is invalid');
+    }
+    assertUniqueTopLevelJsonMembers(Buffer.from(segments[0], 'base64url').toString('utf8'));
+    assertUniqueTopLevelJsonMembers(Buffer.from(segments[1], 'base64url').toString('utf8'));
+  } catch {
+    throw new AppError(401, 'invalid_end_user_token', 'End-user identity token is invalid or expired');
+  }
+}
+
 export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> {
   let identityConfiguration: EndUserJwtConfiguration;
   try {
@@ -73,6 +87,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
       error instanceof Error ? error.message : 'JWT verification configuration is invalid'
     );
   }
+  assertUniqueJwtMembers(token);
   const payload = await new Promise<JwtPayload>((resolve, reject) => {
     jwt.verify(token, (header, callback) => signingKey(identityConfiguration, header, callback), {
       algorithms: ['ES256'],

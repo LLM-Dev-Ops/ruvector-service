@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'crypto';
+import { generateKeyPairSync, sign as signBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
 import { verifyEndUserJwt } from '../../src/utils/identityJwt';
@@ -29,6 +29,17 @@ function unsignedMetadataToken(header: Record<string, unknown>, payload: Record<
   return [header, payload, { signature: true }]
     .map((value) => Buffer.from(JSON.stringify(value)).toString('base64url'))
     .join('.');
+}
+
+function rawSignedToken(headerJson: string, payloadJson: string): string {
+  const protectedHeader = Buffer.from(headerJson).toString('base64url');
+  const payload = Buffer.from(payloadJson).toString('base64url');
+  const signingInput = `${protectedHeader}.${payload}`;
+  const signature = signBytes('sha256', Buffer.from(signingInput), {
+    key: privateKey,
+    dsaEncoding: 'ieee-p1363',
+  }).toString('base64url');
+  return `${signingInput}.${signature}`;
 }
 
 describe('end-user identity JWT verification', () => {
@@ -149,6 +160,33 @@ describe('end-user identity JWT verification', () => {
     await expect(verifyEndUserJwt(unsignedMetadataToken(header, {
       iss: 'https://identity.test/auth/v1', sub: 'user-1', aud: 'authenticated',
     }))).rejects.toMatchObject({ statusCode: 401, code: 'invalid_end_user_token' });
+  });
+
+  it.each([
+    [
+      'duplicate protected-header members',
+      '{"alg":"none","alg":"ES256","typ":"JWT","kid":"test-key"}',
+      `{"iss":"https://identity.test/auth/v1","sub":"user-1","aud":"authenticated","exp":${Math.floor(Date.now() / 1000) + 300}}`,
+    ],
+    [
+      'duplicate payload members',
+      '{"alg":"ES256","typ":"JWT","kid":"test-key"}',
+      `{"iss":"https://identity.test/auth/v1","sub":"attacker","sub":"user-1","aud":"authenticated","exp":${Math.floor(Date.now() / 1000) + 300}}`,
+    ],
+  ])('rejects %s before JWKS lookup', async (_case, headerJson, payloadJson) => {
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = 'https://identity.test/duplicate-json-jwks';
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+    try {
+      await expect(verifyEndUserJwt(rawSignedToken(headerJson, payloadJson))).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'invalid_end_user_token',
+      });
+      expect(getSigningKey).not.toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
   });
 
   it.each([
