@@ -9,6 +9,7 @@ import {
   parseServiceAudience,
 } from '../utils/principalBindings';
 import { readSingleHeader } from '../utils/httpHeaders';
+import { assertUniqueTopLevelJsonMembers } from '../utils/jsonMembers';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -54,57 +55,6 @@ function bearerToken(req: Request): string {
   return token;
 }
 
-function assertUniqueTopLevelMemberNames(serialized: string): void {
-  const memberNames = new Set<string>();
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let stringStart = -1;
-  let expectingMemberName = false;
-
-  for (let index = 0; index < serialized.length; index += 1) {
-    const character = serialized[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-        if (depth === 1 && expectingMemberName) {
-          let next = index + 1;
-          while (/\s/.test(serialized[next] ?? '')) {
-            next += 1;
-          }
-          if (serialized[next] === ':') {
-            const memberName = JSON.parse(serialized.slice(stringStart, index + 1)) as string;
-            if (memberNames.has(memberName)) {
-              throw new Error('JWT JSON object contains duplicate member names');
-            }
-            memberNames.add(memberName);
-            expectingMemberName = false;
-          }
-        }
-      }
-      continue;
-    }
-
-    if (character === '"') {
-      inString = true;
-      stringStart = index;
-    } else if (character === '{' || character === '[') {
-      depth += 1;
-      if (depth === 1 && character === '{') {
-        expectingMemberName = true;
-      }
-    } else if (character === '}' || character === ']') {
-      depth -= 1;
-    } else if (character === ',' && depth === 1) {
-      expectingMemberName = true;
-    }
-  }
-}
-
 function decodeClaims(token: string): CloudRunClaims {
   const segments = token.split('.');
   if (
@@ -119,7 +69,7 @@ function decodeClaims(token: string): CloudRunClaims {
       throw new Error('JWT component encoding is not canonical');
     }
     const protectedHeaderJson = decodedSegments[0].toString('utf8');
-    assertUniqueTopLevelMemberNames(protectedHeaderJson);
+    assertUniqueTopLevelJsonMembers(protectedHeaderJson);
     const protectedHeader: unknown = JSON.parse(protectedHeaderJson);
     if (
       protectedHeader === null ||
@@ -140,7 +90,7 @@ function decodeClaims(token: string): CloudRunClaims {
       throw new Error('JWT protected header metadata is invalid');
     }
     const payloadJson = decodedSegments[1].toString('utf8');
-    assertUniqueTopLevelMemberNames(payloadJson);
+    assertUniqueTopLevelJsonMembers(payloadJson);
     const decoded: unknown = JSON.parse(payloadJson);
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
       throw new Error('JWT payload is not an object');

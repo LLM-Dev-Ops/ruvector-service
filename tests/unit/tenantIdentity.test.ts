@@ -383,6 +383,7 @@ describe('tenant-bound data-plane identity', () => {
   });
 
   it.each([
+    ['duplicate raw principal keys', '{"platform@test.example":"org-a","platform@test.example":"org-b"}'],
     ['case-insensitive duplicate principals', '{"Platform@test.example":"org-a","platform@test.example":"org-b"}'],
     ['non-string organization identifiers', '{"platform@test.example":42}'],
     ['empty organization identifiers', '{"platform@test.example":""}'],

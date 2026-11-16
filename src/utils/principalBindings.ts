@@ -1,3 +1,5 @@
+import { assertUniqueTopLevelJsonMembers } from './jsonMembers';
+
 export function parseServiceAudience(value: unknown): string {
   if (
     typeof value !== 'string' ||
@@ -12,8 +14,12 @@ export function parseServiceAudience(value: unknown): string {
 export function parsePrincipalOrgBindings(value: string): Record<string, string> {
   let parsed: unknown;
   try {
+    assertUniqueTopLevelJsonMembers(value);
     parsed = JSON.parse(value);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('duplicate JSON member')) {
+      throw error;
+    }
     throw new Error('Principal bindings must be valid JSON');
   }
 
