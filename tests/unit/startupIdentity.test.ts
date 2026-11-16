@@ -100,6 +100,7 @@ describe('identity provider startup assertions', () => {
     ['whitespace-padded default scope', 'defaultScopes', '["platform:read "]', /without surrounding whitespace/],
     ['duplicate default scope', 'defaultScopes', '["platform:read","platform:read"]', /must be unique/],
     ['unpaired-surrogate service audience', 'serviceAudience', '\ud800', /Unicode scalar values/],
+    ['unpaired-surrogate JWT audience', 'jwtAudience', '\ud800', /Unicode scalar values/],
     ['unpaired-surrogate principal binding key', 'principalOrgBindings', '{"\\ud800@test.example":"org-a"}', /Unicode scalar values/],
     ['unpaired-surrogate organization binding', 'principalOrgBindings', '{"platform@test.example":"\\ud800"}', /Unicode scalar values/],
     ['unpaired-surrogate identity caller', 'identityCallerPrincipals', '["\\ud800@test.example"]', /Unicode scalar values/],

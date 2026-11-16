@@ -151,7 +151,8 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
   if (
     audiences.length === 0 ||
     audiences.some((audience) =>
-      typeof audience !== 'string' || audience.length === 0 || audience.trim() !== audience
+      typeof audience !== 'string' || audience.length === 0 || audience.trim() !== audience ||
+      !isWellFormedUnicode(audience)
     ) ||
     new Set(audiences).size !== audiences.length ||
     audiences.filter((audience) => audience === identityConfiguration.audience).length !== 1

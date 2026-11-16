@@ -1,3 +1,5 @@
+import { isWellFormedUnicode } from './utf8';
+
 export interface EndUserJwtConfiguration {
   issuer: string;
   audience: string;
@@ -48,9 +50,12 @@ export function parseEndUserJwtConfiguration(value: {
   if (
     typeof value.audience !== 'string' ||
     value.audience.length === 0 ||
-    value.audience.trim() !== value.audience
+    value.audience.trim() !== value.audience ||
+    !isWellFormedUnicode(value.audience)
   ) {
-    throw new Error('JWT audience must be a non-empty string without surrounding whitespace');
+    throw new Error(
+      'JWT audience must be a non-empty string without surrounding whitespace and contain only Unicode scalar values'
+    );
   }
   return {
     issuer: parseHttpsUrl(value.issuer, 'JWT issuer', false),

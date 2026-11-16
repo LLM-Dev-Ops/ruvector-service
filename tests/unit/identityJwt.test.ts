@@ -103,6 +103,7 @@ describe('end-user identity JWT verification', () => {
     ['JWT issuer with a query', 'jwtIssuer', 'https://identity.test/auth/v1?tenant=example'],
     ['JWT issuer with a fragment', 'jwtIssuer', 'https://identity.test/auth/v1#issuer'],
     ['JWT audience', 'jwtAudience', ' authenticated '],
+    ['JWT audience with an unpaired surrogate', 'jwtAudience', '\ud800'],
     ['JWKS URI', 'jwksUri', ' https://identity.test/.well-known/jwks.json '],
     ['JWKS URI with an explicit default port', 'jwksUri', 'https://identity.test:443/.well-known/jwks.json'],
     ['JWKS URI with path dot segments', 'jwksUri', 'https://identity.test/keys/../.well-known/jwks.json'],
@@ -175,6 +176,7 @@ describe('end-user identity JWT verification', () => {
     ['an empty audience entry', ['authenticated', '']],
     ['a whitespace-only audience entry', ['authenticated', '   ']],
     ['a whitespace-padded audience entry', ['authenticated', ' other-client ']],
+    ['an unpaired-surrogate audience entry', ['authenticated', '\ud800']],
   ])('rejects a multi-audience token with %s', async (_case, audience) => {
     const malformedAudience = jwt.sign({
       email: 'owner@example.test',
