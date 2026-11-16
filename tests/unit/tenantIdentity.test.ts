@@ -15,6 +15,10 @@ function token(payload: Record<string, unknown>): string {
   return tokenValue(payload);
 }
 
+function rawToken(protectedHeader: string, payload: string): string {
+  return `${Buffer.from(protectedHeader).toString('base64url')}.${Buffer.from(payload).toString('base64url')}.unsigned`;
+}
+
 function request(payload: Record<string, unknown>): Request {
   return {
     headers: { authorization: `Bearer ${token(payload)}` },
@@ -176,6 +180,44 @@ describe('tenant-bound data-plane identity', () => {
     })).toString('base64url');
     const req = {
       headers: { authorization: `Bearer ${header}.${payload}.unsigned` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it('rejects duplicate protected-header member names before principal binding', () => {
+    const iam = rawToken(
+      '{"alg":"none","alg":"RS256","typ":"JWT","kid":"google-key-1"}',
+      '{"aud":"https://ruvector.test","email":"platform@test.example","sub":"iam-subject-1"}'
+    );
+    const req = {
+      headers: { authorization: `Bearer ${iam}` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it('rejects duplicate payload member names before principal binding', () => {
+    const iam = rawToken(
+      '{"alg":"RS256","typ":"JWT","kid":"google-key-1"}',
+      '{"aud":"https://other.test","aud":"https://ruvector.test","email":"platform@test.example","sub":"iam-subject-1"}'
+    );
+    const req = {
+      headers: { authorization: `Bearer ${iam}` },
     } as unknown as Request;
     const next = jest.fn() as NextFunction;
 
