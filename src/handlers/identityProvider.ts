@@ -720,8 +720,18 @@ export async function pollCliSessionHandler(
         FOR SHARE`,
       [session.authorized_issuer, session.authorized_subject, session.organization_id]
     );
+    if (membershipResult.rows.length === 0) {
+      throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
+    }
+    if (membershipResult.rows.length !== 1) {
+      throw new AppError(
+        403,
+        'session_membership_ambiguous',
+        'Authorizing identity has multiple active memberships in the persisted tenant'
+      );
+    }
     const membership = membershipResult.rows[0];
-    if (!membership || membership.role !== 'owner') {
+    if (membership.role !== 'owner') {
       throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
     }
     const hasEncryptedCopy = session.encrypted_api_key !== null;

@@ -1475,6 +1475,45 @@ describe('IAM-scoped identity provider', () => {
     );
   });
 
+  it('rejects ambiguous active delivery memberships before key access or completed metadata', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) return { rows: [{ is_unexpired: true }] };
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: null, key_delivered_at: '2030-01-01T00:05:00Z',
+          expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [
+          { email: 'first-owner@example.test', payment_status: 'paid', role: 'owner' },
+          { email: 'second-owner@example.test', payment_status: 'paid', role: 'owner' },
+        ] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', key_hash: 'a'.repeat(64),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      res, { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 403, code: 'session_membership_ambiguous' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_api_keys'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('refuses delivery after the issued key is revoked or expired', async () => {
     const client = {
       query: jest.fn(async (sql: string, _params?: unknown[]) => {
