@@ -59,14 +59,21 @@ function signingKey(
     .catch((error: Error) => callback(error));
 }
 
-function assertUniqueJwtMembers(token: string): void {
+function assertCanonicalJwtSerialization(token: string): void {
   try {
     const segments = token.split('.');
-    if (segments.length !== 3 || segments[0].length === 0 || segments[1].length === 0) {
+    if (
+      segments.length !== 3 ||
+      segments.some((segment) => segment.length === 0 || !/^[A-Za-z0-9_-]+$/.test(segment))
+    ) {
       throw new Error('JWT compact serialization is invalid');
     }
-    assertUniqueTopLevelJsonMembers(Buffer.from(segments[0], 'base64url').toString('utf8'));
-    assertUniqueTopLevelJsonMembers(Buffer.from(segments[1], 'base64url').toString('utf8'));
+    const decoded = segments.map((segment) => Buffer.from(segment, 'base64url'));
+    if (decoded.some((value, index) => value.toString('base64url') !== segments[index])) {
+      throw new Error('JWT component encoding is not canonical');
+    }
+    assertUniqueTopLevelJsonMembers(decoded[0].toString('utf8'));
+    assertUniqueTopLevelJsonMembers(decoded[1].toString('utf8'));
   } catch {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token is invalid or expired');
   }
@@ -87,7 +94,7 @@ export async function verifyEndUserJwt(token: string): Promise<VerifiedEndUser> 
       error instanceof Error ? error.message : 'JWT verification configuration is invalid'
     );
   }
-  assertUniqueJwtMembers(token);
+  assertCanonicalJwtSerialization(token);
   const payload = await new Promise<JwtPayload>((resolve, reject) => {
     jwt.verify(token, (header, callback) => signingKey(identityConfiguration, header, callback), {
       algorithms: ['ES256'],

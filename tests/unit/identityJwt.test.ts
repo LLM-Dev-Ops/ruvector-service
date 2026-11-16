@@ -31,15 +31,33 @@ function unsignedMetadataToken(header: Record<string, unknown>, payload: Record<
     .join('.');
 }
 
-function rawSignedToken(headerJson: string, payloadJson: string): string {
-  const protectedHeader = Buffer.from(headerJson).toString('base64url');
-  const payload = Buffer.from(payloadJson).toString('base64url');
+function signedComponents(protectedHeader: string, payload: string): string {
   const signingInput = `${protectedHeader}.${payload}`;
   const signature = signBytes('sha256', Buffer.from(signingInput), {
     key: privateKey,
     dsaEncoding: 'ieee-p1363',
   }).toString('base64url');
   return `${signingInput}.${signature}`;
+}
+
+function rawSignedToken(headerJson: string, payloadJson: string): string {
+  return signedComponents(
+    Buffer.from(headerJson).toString('base64url'),
+    Buffer.from(payloadJson).toString('base64url'),
+  );
+}
+
+function noncanonicalComponent(canonical: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  if (canonical.length % 4 !== 2 && canonical.length % 4 !== 3) {
+    throw new Error('Fixture must have unused base64url trailing bits');
+  }
+  const lastIndex = alphabet.indexOf(canonical.at(-1) ?? '');
+  const alternate = canonical.slice(0, -1) + alphabet[lastIndex + 1];
+  if (!Buffer.from(alternate, 'base64url').equals(Buffer.from(canonical, 'base64url'))) {
+    throw new Error('Fixture alternate encoding changed the decoded value');
+  }
+  return alternate;
 }
 
 describe('end-user identity JWT verification', () => {
@@ -187,6 +205,42 @@ describe('end-user identity JWT verification', () => {
     } finally {
       config.dataPlaneIdentity.jwksUri = originalUri;
     }
+  });
+
+  it.each([
+    ['protected-header', 0],
+    ['payload', 1],
+    ['signature', 2],
+  ])('rejects a noncanonical %s component before JWKS lookup', async (_case, componentIndex) => {
+    const headerJson = '{"alg":"ES256","typ":"JWT","kid":"test-key"}';
+    const payloadJson = JSON.stringify({
+      iss: 'https://identity.test/auth/v1',
+      sub: 'user-1',
+      aud: 'authenticated',
+      exp: Math.floor(Date.now() / 1000) + 300,
+      email: 'owner@example.test',
+    });
+    const components = [
+      Buffer.from(headerJson).toString('base64url'),
+      Buffer.from(payloadJson).toString('base64url'),
+    ];
+    let candidate: string;
+    if (componentIndex < 2) {
+      components[componentIndex] = noncanonicalComponent(components[componentIndex]);
+      candidate = signedComponents(components[0], components[1]);
+    } else {
+      const signed = signedComponents(components[0], components[1]).split('.');
+      signed[2] = noncanonicalComponent(signed[2]);
+      candidate = signed.join('.');
+    }
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+
+    await expect(verifyEndUserJwt(candidate)).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'invalid_end_user_token',
+    });
+    expect(getSigningKey).not.toHaveBeenCalled();
   });
 
   it.each([
