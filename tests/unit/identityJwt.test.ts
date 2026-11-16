@@ -267,6 +267,37 @@ describe('end-user identity JWT verification', () => {
   });
 
   it.each([
+    ['protected-header', true],
+    ['payload', false],
+  ])('rejects a UTF-8 byte-order mark in the %s before JWKS lookup', async (_case, markedHeader) => {
+    const byteOrderMark = Buffer.from([0xef, 0xbb, 0xbf]);
+    const validHeader = Buffer.from('{"alg":"ES256","typ":"JWT","kid":"test-key"}');
+    const validPayload = Buffer.from(JSON.stringify({
+      iss: 'https://identity.test/auth/v1',
+      sub: 'user-1',
+      aud: 'authenticated',
+      exp: Math.floor(Date.now() / 1000) + 300,
+      email: 'owner@example.test',
+    }));
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = 'https://identity.test/bom-jwks';
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+    try {
+      await expect(verifyEndUserJwt(rawSignedBytesToken(
+        markedHeader ? Buffer.concat([byteOrderMark, validHeader]) : validHeader,
+        markedHeader ? validPayload : Buffer.concat([byteOrderMark, validPayload]),
+      ))).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'invalid_end_user_token',
+      });
+      expect(getSigningKey).not.toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
+  });
+
+  it.each([
     ['protected-header', 0],
     ['payload', 1],
     ['signature', 2],

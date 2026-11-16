@@ -271,6 +271,37 @@ describe('tenant-bound data-plane identity', () => {
     expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
+  it.each([
+    ['protected-header', true],
+    ['payload', false],
+  ])('rejects a UTF-8 byte-order mark in the transport JWT %s before principal binding', (
+    _case,
+    markedHeader,
+  ) => {
+    const byteOrderMark = Buffer.from([0xef, 0xbb, 0xbf]);
+    const validHeader = Buffer.from('{"alg":"RS256","typ":"JWT","kid":"google-key-1"}');
+    const validPayload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    }));
+    const req = {
+      headers: { authorization: `Bearer ${rawBytesToken(
+        markedHeader ? Buffer.concat([byteOrderMark, validHeader]) : validHeader,
+        markedHeader ? validPayload : Buffer.concat([byteOrderMark, validPayload]),
+      )}` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('rejects a noncanonical padded transport JWT payload before principal binding', () => {
     const canonical = token({
       aud: 'https://ruvector.test',
