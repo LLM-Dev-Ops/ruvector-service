@@ -47,6 +47,13 @@ function rawSignedToken(headerJson: string, payloadJson: string): string {
   );
 }
 
+function rawSignedBytesToken(protectedHeader: Buffer, payload: Buffer): string {
+  return signedComponents(
+    protectedHeader.toString('base64url'),
+    payload.toString('base64url'),
+  );
+}
+
 function noncanonicalComponent(canonical: string): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   if (canonical.length % 4 !== 2 && canonical.length % 4 !== 3) {
@@ -210,6 +217,46 @@ describe('end-user identity JWT verification', () => {
     mockedJwks.mockReturnValue({ getSigningKey } as never);
     try {
       await expect(verifyEndUserJwt(rawSignedToken(headerJson, payloadJson))).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'invalid_end_user_token',
+      });
+      expect(getSigningKey).not.toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
+  });
+
+  it.each([
+    ['protected-header', true],
+    ['payload', false],
+  ])('rejects malformed UTF-8 in the %s before JWKS lookup', async (_case, invalidHeader) => {
+    const validHeader = Buffer.from('{"alg":"ES256","typ":"JWT","kid":"test-key"}');
+    const validPayload = Buffer.from(JSON.stringify({
+      iss: 'https://identity.test/auth/v1',
+      sub: 'user-1',
+      aud: 'authenticated',
+      exp: Math.floor(Date.now() / 1000) + 300,
+      email: 'owner@example.test',
+    }));
+    const invalidHeaderBytes = Buffer.concat([
+      Buffer.from('{"alg":"ES256","typ":"JWT","kid":"test-key","x":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    const invalidPayloadBytes = Buffer.concat([
+      Buffer.from(`{"iss":"https://identity.test/auth/v1","sub":"user-1","aud":"authenticated","exp":${Math.floor(Date.now() / 1000) + 300},"x":"`),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = 'https://identity.test/invalid-utf8-jwks';
+    const getSigningKey = jest.fn().mockResolvedValue({ getPublicKey: () => publicKey });
+    mockedJwks.mockReturnValue({ getSigningKey } as never);
+    try {
+      await expect(verifyEndUserJwt(rawSignedBytesToken(
+        invalidHeader ? invalidHeaderBytes : validHeader,
+        invalidHeader ? validPayload : invalidPayloadBytes,
+      ))).rejects.toMatchObject({
         statusCode: 401,
         code: 'invalid_end_user_token',
       });

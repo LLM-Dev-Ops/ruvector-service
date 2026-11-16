@@ -8,6 +8,7 @@ import {
   type EndUserJwtConfiguration,
 } from './identityJwtConfiguration';
 import { assertUniqueTopLevelJsonMembers } from './jsonMembers';
+import { decodeStrictUtf8 } from './utf8';
 
 export interface VerifiedEndUser {
   issuer: string;
@@ -95,8 +96,8 @@ function assertCanonicalJwtSerialization(token: string): void {
     if (decoded.some((value, index) => value.toString('base64url') !== segments[index])) {
       throw new Error('JWT component encoding is not canonical');
     }
-    assertUniqueTopLevelJsonMembers(decoded[0].toString('utf8'));
-    assertUniqueTopLevelJsonMembers(decoded[1].toString('utf8'));
+    assertUniqueTopLevelJsonMembers(decodeStrictUtf8(decoded[0]));
+    assertUniqueTopLevelJsonMembers(decodeStrictUtf8(decoded[1]));
   } catch {
     throw new AppError(401, 'invalid_end_user_token', 'End-user identity token is invalid or expired');
   }

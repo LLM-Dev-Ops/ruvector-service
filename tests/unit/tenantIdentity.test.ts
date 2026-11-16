@@ -19,6 +19,10 @@ function rawToken(protectedHeader: string, payload: string): string {
   return `${Buffer.from(protectedHeader).toString('base64url')}.${Buffer.from(payload).toString('base64url')}.unsigned`;
 }
 
+function rawBytesToken(protectedHeader: Buffer, payload: Buffer): string {
+  return `${protectedHeader.toString('base64url')}.${payload.toString('base64url')}.unsigned`;
+}
+
 function request(payload: Record<string, unknown>): Request {
   return {
     headers: { authorization: `Bearer ${token(payload)}` },
@@ -218,6 +222,43 @@ describe('tenant-bound data-plane identity', () => {
     );
     const req = {
       headers: { authorization: `Bearer ${iam}` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it.each([
+    ['protected-header', true],
+    ['payload', false],
+  ])('rejects malformed UTF-8 in the transport JWT %s before principal binding', (_case, invalidHeader) => {
+    const validHeader = Buffer.from('{"alg":"RS256","typ":"JWT","kid":"google-key-1"}');
+    const validPayload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    }));
+    const invalidHeaderBytes = Buffer.concat([
+      Buffer.from('{"alg":"RS256","typ":"JWT","kid":"google-key-1","x":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    const invalidPayloadBytes = Buffer.concat([
+      Buffer.from('{"aud":"https://ruvector.test","email":"platform@test.example","sub":"iam-subject-1","x":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    const req = {
+      headers: { authorization: `Bearer ${rawBytesToken(
+        invalidHeader ? invalidHeaderBytes : validHeader,
+        invalidHeader ? validPayload : invalidPayloadBytes,
+      )}` },
     } as unknown as Request;
     const next = jest.fn() as NextFunction;
 

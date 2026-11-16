@@ -10,6 +10,7 @@ import {
 } from '../utils/principalBindings';
 import { readSingleHeader } from '../utils/httpHeaders';
 import { assertUniqueTopLevelJsonMembers } from '../utils/jsonMembers';
+import { decodeStrictUtf8 } from '../utils/utf8';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -68,7 +69,7 @@ function decodeClaims(token: string): CloudRunClaims {
     if (decodedSegments.some((decoded, index) => decoded.toString('base64url') !== segments[index])) {
       throw new Error('JWT component encoding is not canonical');
     }
-    const protectedHeaderJson = decodedSegments[0].toString('utf8');
+    const protectedHeaderJson = decodeStrictUtf8(decodedSegments[0]);
     assertUniqueTopLevelJsonMembers(protectedHeaderJson);
     const protectedHeader: unknown = JSON.parse(protectedHeaderJson);
     if (
@@ -89,7 +90,7 @@ function decodeClaims(token: string): CloudRunClaims {
     ) {
       throw new Error('JWT protected header metadata is invalid');
     }
-    const payloadJson = decodedSegments[1].toString('utf8');
+    const payloadJson = decodeStrictUtf8(decodedSegments[1]);
     assertUniqueTopLevelJsonMembers(payloadJson);
     const decoded: unknown = JSON.parse(payloadJson);
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
