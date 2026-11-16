@@ -23,10 +23,26 @@ const EndUserEmailSchema = z.string().email().refine(
   'Email must not contain surrounding whitespace'
 );
 
+function assertUniqueJwksKeyIdentifiers(keys: unknown): void {
+  if (!Array.isArray(keys)) {
+    throw new Error('JWKS response must contain a key array');
+  }
+  const keyIdentifiers = new Set<string>();
+  for (const key of keys) {
+    if (typeof key !== 'object' || key === null || Array.isArray(key)) continue;
+    const keyIdentifier = (key as Record<string, unknown>).kid;
+    if (typeof keyIdentifier !== 'string') continue;
+    if (keyIdentifiers.has(keyIdentifier)) {
+      throw new Error('JWKS response contains an ambiguous key identifier');
+    }
+    keyIdentifiers.add(keyIdentifier);
+  }
+}
+
 function signingClient(jwksUri: string): JwksClient {
   if (!client || clientUri !== jwksUri) {
     clientUri = jwksUri;
-    client = jwksClient({
+    const nextClient = jwksClient({
       jwksUri: clientUri,
       cache: true,
       cacheMaxAge: 600_000,
@@ -34,6 +50,13 @@ function signingClient(jwksUri: string): JwksClient {
       jwksRequestsPerMinute: 10,
       timeout: 10_000,
     });
+    const getKeys = nextClient.getKeys.bind(nextClient);
+    nextClient.getKeys = async () => {
+      const keys = await getKeys();
+      assertUniqueJwksKeyIdentifiers(keys);
+      return keys;
+    };
+    client = nextClient;
   }
   return client;
 }

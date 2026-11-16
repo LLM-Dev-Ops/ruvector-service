@@ -63,6 +63,9 @@ function noncanonicalComponent(canonical: string): string {
 describe('end-user identity JWT verification', () => {
   beforeEach(() => {
     mockedJwks.mockReturnValue({
+      getKeys: jest.fn().mockResolvedValue([
+        { kid: 'test-key', alg: 'ES256', getPublicKey: () => publicKey },
+      ]),
       getSigningKey: jest.fn().mockResolvedValue({ getPublicKey: () => publicKey }),
     } as never);
   });
@@ -241,6 +244,39 @@ describe('end-user identity JWT verification', () => {
       code: 'invalid_end_user_token',
     });
     expect(getSigningKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ambiguous JWKS response with duplicate key identifiers', async () => {
+    const originalUri = config.dataPlaneIdentity.jwksUri;
+    config.dataPlaneIdentity.jwksUri = 'https://identity.test/duplicate-kid-jwks';
+    const signingKeys = [
+      { kid: 'test-key', alg: 'ES256', getPublicKey: () => publicKey },
+      { kid: 'test-key', alg: 'ES256', getPublicKey: () => publicKey },
+    ];
+    const getKeys = jest.fn().mockResolvedValue(signingKeys);
+    const jwks: {
+      getKeys: jest.Mock<Promise<typeof signingKeys>, []>;
+      getSigningKey: jest.Mock;
+    } = {
+      getKeys,
+      getSigningKey: jest.fn(),
+    };
+    jwks.getSigningKey.mockImplementation(async (kid: string) => {
+      const keys: typeof signingKeys = await jwks.getKeys();
+      const key = keys.find((candidate) => candidate.kid === kid);
+      if (!key) throw new Error('Signing key not found');
+      return key;
+    });
+    mockedJwks.mockReturnValue(jwks as never);
+    try {
+      await expect(verifyEndUserJwt(token())).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'invalid_end_user_token',
+      });
+      expect(getKeys).toHaveBeenCalled();
+    } finally {
+      config.dataPlaneIdentity.jwksUri = originalUri;
+    }
   });
 
   it.each([
