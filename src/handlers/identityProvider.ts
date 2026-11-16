@@ -191,8 +191,19 @@ function decryptApiKey(
   organizationId: string,
   keyId: string
 ): string {
-  const parts = value.split('.').map((part) => Buffer.from(part, 'base64url'));
-  if (parts.length !== 3 || parts[0].length !== 12 || parts[1].length !== 16) {
+  const encodedParts = value.split('.');
+  if (
+    encodedParts.length !== 3 ||
+    encodedParts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))
+  ) {
+    throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope is invalid');
+  }
+  const parts = encodedParts.map((part) => Buffer.from(part, 'base64url'));
+  if (
+    parts[0].length !== 12 ||
+    parts[1].length !== 16 ||
+    parts.some((part, index) => part.toString('base64url') !== encodedParts[index])
+  ) {
     throw new AppError(500, 'invalid_encrypted_session_key', 'Persisted CLI key envelope is invalid');
   }
   const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), parts[0]);

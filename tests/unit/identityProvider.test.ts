@@ -1660,6 +1660,48 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-canonical persisted delivery envelope before disclosure or erasure', async () => {
+    const plaintextKey = `agentics_sk_cli_${'5'.repeat(64)}`;
+    const keyId = 'd544b40b-2e18-4f67-9c41-ca12ad8f2526';
+    const [iv, tag, ciphertext] = encryptedDelivery(plaintextKey, 'ABCDEFGH', 'org-test', keyId).split('.');
+    const nonCanonicalEnvelope = `${iv}=.${tag}.${ciphertext}`;
+    const res = response();
+    const client = {
+      query: jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: keyId,
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: nonCanonicalEnvelope, key_delivered_at: null,
+          expires_at: '2030-01-01T00:10:00Z', is_unexpired: true,
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: keyId,
+          key_hash: createHash('sha256').update(plaintextKey).digest('hex'),
+          scopes: ['platform:read'],
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'a'.repeat(64) } } as unknown as Request,
+      res, { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_encrypted_session_key' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('encrypted_api_key = NULL'), expect.anything()
+    );
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('refuses a delivery envelope moved from another completed session', async () => {
     const plaintextKey = `agentics_sk_cli_${'2'.repeat(64)}`;
     const movedKeyId = 'd544b40b-2e18-4f67-9c41-ca12ad8f2526';
