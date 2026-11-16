@@ -75,6 +75,17 @@ function decodeClaims(token: string): CloudRunClaims {
     ) {
       throw new Error('JWT protected header is not an object');
     }
+    const header = protectedHeader as Record<string, unknown>;
+    if (
+      header.alg !== 'RS256' ||
+      header.typ !== 'JWT' ||
+      typeof header.kid !== 'string' ||
+      header.kid.length === 0 ||
+      header.kid.trim() !== header.kid ||
+      Object.prototype.hasOwnProperty.call(header, 'crit')
+    ) {
+      throw new Error('JWT protected header metadata is invalid');
+    }
     const payload = decodedSegments[1];
     const decoded: unknown = JSON.parse(payload.toString('utf8'));
     if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {

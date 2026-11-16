@@ -4,7 +4,9 @@ import { requireDataPlaneTenant, requireIdentityProviderCaller } from '../../src
 import { config } from '../../src/config';
 
 function tokenValue(payload: unknown): string {
-  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+  const header = Buffer.from(JSON.stringify({
+    alg: 'RS256', typ: 'JWT', kid: 'google-key-1',
+  })).toString('base64url');
   const claims = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `${header}.${claims}.unsigned`;
 }
@@ -153,6 +155,39 @@ describe('tenant-bound data-plane identity', () => {
     expect(req.dataPlanePrincipal).toBeUndefined();
   });
 
+  it.each([
+    ['a missing algorithm', { typ: 'JWT', kid: 'google-key-1' }],
+    ['an alternate algorithm', { alg: 'none', typ: 'JWT', kid: 'google-key-1' }],
+    ['a missing token type', { alg: 'RS256', kid: 'google-key-1' }],
+    ['an alternate token type', { alg: 'RS256', typ: 'jwt', kid: 'google-key-1' }],
+    ['a missing key identifier', { alg: 'RS256', typ: 'JWT' }],
+    ['an empty key identifier', { alg: 'RS256', typ: 'JWT', kid: '' }],
+    ['a whitespace-padded key identifier', { alg: 'RS256', typ: 'JWT', kid: ' google-key-1' }],
+    ['a non-string key identifier', { alg: 'RS256', typ: 'JWT', kid: 42 }],
+    ['an unsupported critical-header declaration', {
+      alg: 'RS256', typ: 'JWT', kid: 'google-key-1', crit: [],
+    }],
+  ])('rejects a transport JWT protected header with %s', (_case, protectedHeader) => {
+    const header = Buffer.from(JSON.stringify(protectedHeader)).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      aud: 'https://ruvector.test',
+      email: 'platform@test.example',
+      sub: 'iam-subject-1',
+    })).toString('base64url');
+    const req = {
+      headers: { authorization: `Bearer ${header}.${payload}.unsigned` },
+    } as unknown as Request;
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
   it('rejects a noncanonical padded transport JWT payload before principal binding', () => {
     const canonical = token({
       aud: 'https://ruvector.test',
@@ -218,7 +253,9 @@ describe('tenant-bound data-plane identity', () => {
   });
 
   it('rejects a noncanonical signature component before principal binding', () => {
-    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const header = Buffer.from(JSON.stringify({
+      alg: 'RS256', typ: 'JWT', kid: 'google-key-1',
+    })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({
       aud: 'https://ruvector.test',
       email: 'platform@test.example',
