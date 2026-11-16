@@ -60,7 +60,11 @@ function decodeClaims(token: string): CloudRunClaims {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token is malformed');
   }
   try {
-    return JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8')) as CloudRunClaims;
+    const decoded: unknown = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+    if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      throw new Error('JWT payload is not an object');
+    }
+    return decoded as CloudRunClaims;
   } catch {
     throw new AppError(401, 'unauthenticated', 'Cloud Run IAM identity token payload is invalid');
   }

@@ -3,10 +3,14 @@ import { AppError } from '../../src/middleware/errorHandler';
 import { requireDataPlaneTenant, requireIdentityProviderCaller } from '../../src/middleware/tenantIdentity';
 import { config } from '../../src/config';
 
-function token(payload: Record<string, unknown>): string {
+function tokenValue(payload: unknown): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
   const claims = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `${header}.${claims}.unsigned`;
+}
+
+function token(payload: Record<string, unknown>): string {
+  return tokenValue(payload);
 }
 
 function request(payload: Record<string, unknown>): Request {
@@ -92,6 +96,26 @@ describe('tenant-bound data-plane identity', () => {
     ['a whitespace-padded principal subject', { email: 'platform@test.example', sub: ' iam-subject-1' }],
   ])('rejects transport identity with %s before principal binding', (_case, identity) => {
     const req = request({ aud: 'https://ruvector.test', ...identity });
+    const next = jest.fn() as NextFunction;
+
+    requireDataPlaneTenant(req, {} as Response, next);
+
+    expect((next as jest.Mock).mock.calls[0][0]).toMatchObject({
+      statusCode: 401,
+      code: 'unauthenticated',
+    });
+    expect(req.dataPlanePrincipal).toBeUndefined();
+  });
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', 'claims'],
+    ['a number', 42],
+  ])('rejects %s transport JWT payload before principal binding', (_case, payload) => {
+    const req = {
+      headers: { authorization: `Bearer ${tokenValue(payload)}` },
+    } as unknown as Request;
     const next = jest.fn() as NextFunction;
 
     requireDataPlaneTenant(req, {} as Response, next);
