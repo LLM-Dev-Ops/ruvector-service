@@ -1337,6 +1337,22 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['BMP private-use code point', 'platform:\uE000read'],
+    ['supplementary private-use code point', 'platform:\u{F0000}read'],
+  ])('fails closed at request time for %s scope configuration', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: {} } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 503, code: 'identity_configuration_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['BMP noncharacter', 'platform:\uFDD0read'],
     ['supplementary noncharacter', 'platform:\u{1FFFE}read'],
   ])('fails closed at request time for %s scope configuration', async (_case, scope) => {
@@ -1401,6 +1417,22 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['BMP private-use code point', 'platform:\uE000read'],
+    ['supplementary private-use code point', 'platform:\u{F0000}read'],
+  ])('rejects %s create-request scope before persistence access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: { scopes: [scope] } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['BMP noncharacter', 'platform:\uFDD0read'],
     ['supplementary noncharacter', 'platform:\u{1FFFE}read'],
   ])('rejects %s create-request scope before persistence access', async (_case, scope) => {
@@ -1451,6 +1483,28 @@ describe('IAM-scoped identity provider', () => {
   it.each([
     ['decomposed acute', 'platform:e\u0301dit'],
     ['decomposed ring', 'platform:A\u030Admin'],
+  ])('rejects %s authorization-request scope before identity access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', scopes: [scope] },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['BMP private-use code point', 'platform:\uE000read'],
+    ['supplementary private-use code point', 'platform:\u{F0000}read'],
   ])('rejects %s authorization-request scope before identity access', async (_case, scope) => {
     config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
     config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
