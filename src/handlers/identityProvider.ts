@@ -10,6 +10,7 @@ import {
   IdentityCliSessionCreatedSchema,
   IdentityCliSessionPollSchema,
   IdentityEntitlementResponseSchema,
+  IdentityOrganizationIdSchema,
 } from '@llm-dev-ops/contracts';
 import { DatabaseClient } from '../clients/DatabaseClient';
 import { config } from '../config';
@@ -305,7 +306,11 @@ async function lockActiveApiKeyByHash(
     [keyHash]
   );
   const key = locked.rows[0];
-  if (!key || !isCurrentScopeList(key.scopes)) return undefined;
+  if (
+    !key ||
+    !IdentityOrganizationIdSchema.safeParse(key.organization_id).success ||
+    !isCurrentScopeList(key.scopes)
+  ) return undefined;
   return await isLockedApiKeyActive(client, key.key_id, key.organization_id) ? key : undefined;
 }
 

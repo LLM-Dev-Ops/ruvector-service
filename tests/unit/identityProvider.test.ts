@@ -110,6 +110,36 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['control-bearing', 'org\u0000admin'],
+    ['malformed Unicode', 'org\uD800admin'],
+  ])('fails closed before disclosing a key with a %s persisted organization identifier', async (
+    _case,
+    organizationId
+  ) => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+        organization_id: organizationId, name: 'cli', scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'), expires_at: null, last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupApiKeyHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'api_key_not_found' });
+
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('AS is_active'), expect.anything());
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['raw API key', { api_key: 'ag_live_secret' }],
     ['caller organization', { key_hash: keyHash, organization_id: 'attacker-org' }],
   ])('rejects %s before querying persistence', async (_case, body) => {
@@ -143,6 +173,48 @@ describe('IAM-scoped identity provider', () => {
       organization_id: 'org-test', plan: 'developer', max_requests: 10000,
       max_tokens: 1000000, max_api_keys: 10,
     });
+  });
+
+  it.each([
+    ['control-bearing', 'org\u0000admin'],
+    ['malformed Unicode', 'org\uD800admin'],
+  ])('fails closed before entitlement access for a %s persisted organization identifier', async (
+    _case,
+    organizationId
+  ) => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+        organization_id: organizationId,
+        name: 'cli',
+        scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'),
+        expires_at: null,
+        last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        organization_id: organizationId, plan: 'developer', max_requests: '10000',
+        max_tokens: '1000000', max_api_keys: '10',
+      }] };
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'entitlement_not_found' });
+
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('AS is_active'), expect.anything());
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_identity_organizations'),
+      expect.anything()
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
   });
 
   it.each([
