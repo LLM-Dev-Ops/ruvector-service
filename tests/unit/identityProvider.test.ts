@@ -916,6 +916,28 @@ describe('IAM-scoped identity provider', () => {
     expect(db.getClient).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['NUL-bearing cli_name', { cli_name: 'agentics\u0000cli' }],
+    ['newline-bearing cli_name', { cli_name: 'agentics\ncli' }],
+    ['NUL-bearing cli_version', { cli_version: '1.0\u0000.0' }],
+    ['newline-bearing cli_version', { cli_version: '1.0\n.0' }],
+    ['NUL-bearing hostname', { hostname: 'work\u0000station' }],
+    ['newline-bearing hostname', { hostname: 'work\nstation' }],
+  ])('rejects control-bearing %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed Unicode in key_name before identity or persistence access', async () => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
@@ -937,6 +959,26 @@ describe('IAM-scoped identity provider', () => {
     ['whitespace-only key_name', ' '],
     ['whitespace-padded key_name', ' CLI Key'],
   ])('rejects noncanonical %s before identity or persistence access', async (_case, keyName) => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: keyName },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['NUL-bearing key_name', 'CLI\u0000Key'],
+    ['newline-bearing key_name', 'CLI\nKey'],
+  ])('rejects control-bearing %s before identity or persistence access', async (_case, keyName) => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
     });
