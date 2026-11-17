@@ -961,6 +961,28 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['line-separator-bearing cli_name', { cli_name: 'agentics\u2028cli' }],
+    ['paragraph-separator-bearing cli_name', { cli_name: 'agentics\u2029cli' }],
+    ['line-separator-bearing cli_version', { cli_version: '1.0\u2028.0' }],
+    ['paragraph-separator-bearing cli_version', { cli_version: '1.0\u2029.0' }],
+    ['line-separator-bearing hostname', { hostname: 'work\u2028station' }],
+    ['paragraph-separator-bearing hostname', { hostname: 'work\u2029station' }],
+  ])('rejects Unicode-separator-bearing %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['zero-width-space-bearing cli_name', { cli_name: 'agentics\u200Bcli' }],
     ['word-joiner-bearing cli_name', { cli_name: 'agentics\u2060cli' }],
     ['zero-width-space-bearing cli_version', { cli_version: '1.0\u200B.0' }],
@@ -1131,6 +1153,26 @@ describe('IAM-scoped identity provider', () => {
     ['NEL-bearing key_name', 'CLI\u0085Key'],
     ['CSI-bearing key_name', 'CLI\u009BKey'],
   ])('rejects C1-control-bearing %s before identity or persistence access', async (_case, keyName) => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: keyName },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['line-separator-bearing key_name', 'CLI\u2028Key'],
+    ['paragraph-separator-bearing key_name', 'CLI\u2029Key'],
+  ])('rejects Unicode-separator-bearing %s before identity or persistence access', async (_case, keyName) => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
     });
