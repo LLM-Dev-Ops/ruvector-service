@@ -1353,6 +1353,22 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['combining long solidus overlay', 'platform:read\u0338'],
+    ['combining enclosing keycap', 'platform:read\u20E3'],
+  ])('fails closed at request time for combining-mark %s scope configuration', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: {} } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 503, code: 'identity_configuration_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['fullwidth read prefix', 'platform:\uFF52ead'],
     ['fullwidth write prefix', 'platform:\uFF57rite'],
   ])('fails closed at request time for compatibility-equivalent %s scope configuration', async (_case, scope) => {
@@ -1500,6 +1516,22 @@ describe('IAM-scoped identity provider', () => {
     ['combining grapheme joiner', 'platform:\u034Fread'],
     ['Hangul choseong filler', 'platform:\u115Fread'],
   ])('rejects default-ignorable %s create-request scope before persistence access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: { scopes: [scope] } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['combining long solidus overlay', 'platform:read\u0338'],
+    ['combining enclosing keycap', 'platform:read\u20E3'],
+  ])('rejects combining-mark %s create-request scope before persistence access', async (_case, scope) => {
     config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
     config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
     const db = { getClient: jest.fn() };
@@ -1666,6 +1698,28 @@ describe('IAM-scoped identity provider', () => {
     ['combining grapheme joiner', 'platform:\u034Fread'],
     ['Hangul choseong filler', 'platform:\u115Fread'],
   ])('rejects default-ignorable %s authorization-request scope before identity access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', scopes: [scope] },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['combining long solidus overlay', 'platform:read\u0338'],
+    ['combining enclosing keycap', 'platform:read\u20E3'],
+  ])('rejects combining-mark %s authorization-request scope before identity access', async (_case, scope) => {
     config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
     config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
     const verify = jest.fn(() => {

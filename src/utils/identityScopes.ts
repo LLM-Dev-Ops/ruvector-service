@@ -36,6 +36,10 @@ function hasUnicodeDefaultIgnorableCodePoint(value: string): boolean {
   return /\p{Default_Ignorable_Code_Point}/u.test(value);
 }
 
+function hasUnicodeCombiningMark(value: string): boolean {
+  return /\p{M}/u.test(value);
+}
+
 function parseScopeList(value: string, name: string): string[] {
   let parsed: unknown;
   try {
@@ -58,10 +62,11 @@ function parseScopeList(value: string, name: string): string[] {
     hasUnicodeNoncharacter(scope) ||
     hasUnicodePrivateUse(scope) ||
     hasUnicodeVariationSelector(scope) ||
-    hasUnicodeDefaultIgnorableCodePoint(scope)
+    hasUnicodeDefaultIgnorableCodePoint(scope) ||
+    hasUnicodeCombiningMark(scope)
   )) {
     throw new Error(
-      `${name} entries must be non-empty strings in exact NFKC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, Unicode private-use code points, Unicode variation selectors, or Unicode default-ignorable code points and contain only Unicode scalar values`
+      `${name} entries must be non-empty strings in exact NFKC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, Unicode private-use code points, Unicode variation selectors, Unicode default-ignorable code points, or Unicode combining marks and contain only Unicode scalar values`
     );
   }
   if (new Set(parsed).size !== parsed.length) {
