@@ -983,6 +983,28 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['FDD0-bearing cli_name', { cli_name: 'agentics\uFDD0cli' }],
+    ['FFFF-bearing cli_name', { cli_name: 'agentics\uFFFFcli' }],
+    ['FDD0-bearing cli_version', { cli_version: '1.0\uFDD0.0' }],
+    ['FFFF-bearing cli_version', { cli_version: '1.0\uFFFF.0' }],
+    ['FDD0-bearing hostname', { hostname: 'work\uFDD0station' }],
+    ['FFFF-bearing hostname', { hostname: 'work\uFFFFstation' }],
+  ])('rejects Unicode-noncharacter-bearing %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['override-bearing cli_name', { cli_name: 'agentics\u202Ecli' }],
     ['isolate-bearing cli_name', { cli_name: 'agentics\u2066cli' }],
     ['override-bearing cli_version', { cli_version: '1.0\u202E.0' }],
@@ -1085,6 +1107,26 @@ describe('IAM-scoped identity provider', () => {
     ['zero-width-space-bearing key_name', 'CLI\u200BKey'],
     ['word-joiner-bearing key_name', 'CLI\u2060Key'],
   ])('rejects format-control-bearing %s before identity or persistence access', async (_case, keyName) => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: keyName },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['FDD0-bearing key_name', 'CLI\uFDD0Key'],
+    ['FFFF-bearing key_name', 'CLI\uFFFFKey'],
+  ])('rejects Unicode-noncharacter-bearing %s before identity or persistence access', async (_case, keyName) => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
     });
