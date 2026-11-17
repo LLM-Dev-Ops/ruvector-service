@@ -43,7 +43,7 @@ function parseScopeList(value: string, name: string): string[] {
     scope.length === 0 ||
     scope.trim() !== scope ||
     !isWellFormedUnicode(scope) ||
-    scope.normalize('NFC') !== scope ||
+    scope.normalize('NFKC') !== scope ||
     hasUnicodeC0OrC1Control(scope) ||
     hasUnicodeWhitespace(scope) ||
     hasUnicodeFormatControl(scope) ||
@@ -51,7 +51,7 @@ function parseScopeList(value: string, name: string): string[] {
     hasUnicodePrivateUse(scope)
   )) {
     throw new Error(
-      `${name} entries must be non-empty strings in exact NFC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, or Unicode private-use code points and contain only Unicode scalar values`
+      `${name} entries must be non-empty strings in exact NFKC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, or Unicode private-use code points and contain only Unicode scalar values`
     );
   }
   if (new Set(parsed).size !== parsed.length) {
