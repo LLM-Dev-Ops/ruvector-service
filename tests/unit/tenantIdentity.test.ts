@@ -79,6 +79,7 @@ describe('tenant-bound data-plane identity', () => {
     ['an empty audience entry', ['https://ruvector.test', '']],
     ['a whitespace-only audience entry', ['https://ruvector.test', '   ']],
     ['a whitespace-padded audience entry', ['https://ruvector.test', ' other-service ']],
+    ['an unpaired-surrogate audience entry', ['https://ruvector.test', '\ud800']],
     ['a non-string audience entry', ['https://ruvector.test', 42]],
   ])('rejects a transport token with %s', (_case, aud) => {
     const req = request({

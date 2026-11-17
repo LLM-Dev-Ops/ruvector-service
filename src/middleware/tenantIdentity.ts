@@ -121,7 +121,8 @@ function requireIamClaims(req: Request): VerifiedIamClaims {
   if (
     audiences.length === 0 ||
     audiences.some((entry) =>
-      typeof entry !== 'string' || entry.length === 0 || entry.trim() !== entry
+      typeof entry !== 'string' || entry.length === 0 || entry.trim() !== entry ||
+      !isWellFormedUnicode(entry)
     ) ||
     new Set(audiences).size !== audiences.length ||
     audiences.filter((entry) => entry === audience).length !== 1
