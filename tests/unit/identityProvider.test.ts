@@ -84,6 +84,32 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['control-bearing', 'cli\u0000admin'],
+    ['malformed Unicode', 'cli\uD800admin'],
+  ])('fails closed before disclosing a key with a %s persisted name', async (_case, name) => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+        organization_id: 'org-test', name, scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'), expires_at: null, last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupApiKeyHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toBeDefined();
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['raw API key', { api_key: 'ag_live_secret' }],
     ['caller organization', { key_hash: keyHash, organization_id: 'attacker-org' }],
   ])('rejects %s before querying persistence', async (_case, body) => {
