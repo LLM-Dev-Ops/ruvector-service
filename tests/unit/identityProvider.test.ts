@@ -1027,6 +1027,28 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['decomposed acute cli_name', { cli_name: 'agentics-e\u0301-cli' }],
+    ['decomposed ring cli_name', { cli_name: 'agentics-A\u030A-cli' }],
+    ['decomposed acute cli_version', { cli_version: '1.0-e\u0301' }],
+    ['decomposed ring cli_version', { cli_version: '1.0-A\u030A' }],
+    ['decomposed acute hostname', { hostname: 'e\u0301-workstation' }],
+    ['decomposed ring hostname', { hostname: 'A\u030A-workstation' }],
+  ])('rejects non-NFC %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['override-bearing cli_name', { cli_name: 'agentics\u202Ecli' }],
     ['isolate-bearing cli_name', { cli_name: 'agentics\u2066cli' }],
     ['override-bearing cli_version', { cli_version: '1.0\u202E.0' }],
@@ -1169,6 +1191,26 @@ describe('IAM-scoped identity provider', () => {
     ['E000-bearing key_name', 'CLI\uE000Key'],
     ['F8FF-bearing key_name', 'CLI\uF8FFKey'],
   ])('rejects Unicode-private-use-bearing %s before identity or persistence access', async (_case, keyName) => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: keyName },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['decomposed acute key_name', 'CLI e\u0301 Key'],
+    ['decomposed ring key_name', 'CLI A\u030A Key'],
+  ])('rejects non-NFC %s before identity or persistence access', async (_case, keyName) => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
     });
