@@ -32,6 +32,10 @@ function hasUnicodeVariationSelector(value: string): boolean {
   return /\p{Variation_Selector}/u.test(value);
 }
 
+function hasUnicodeDefaultIgnorableCodePoint(value: string): boolean {
+  return /\p{Default_Ignorable_Code_Point}/u.test(value);
+}
+
 function parseScopeList(value: string, name: string): string[] {
   let parsed: unknown;
   try {
@@ -53,10 +57,11 @@ function parseScopeList(value: string, name: string): string[] {
     hasUnicodeFormatControl(scope) ||
     hasUnicodeNoncharacter(scope) ||
     hasUnicodePrivateUse(scope) ||
-    hasUnicodeVariationSelector(scope)
+    hasUnicodeVariationSelector(scope) ||
+    hasUnicodeDefaultIgnorableCodePoint(scope)
   )) {
     throw new Error(
-      `${name} entries must be non-empty strings in exact NFKC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, Unicode private-use code points, or Unicode variation selectors and contain only Unicode scalar values`
+      `${name} entries must be non-empty strings in exact NFKC normalization without Unicode whitespace characters, Unicode C0/C1 control characters, Unicode format controls, Unicode noncharacter code points, Unicode private-use code points, Unicode variation selectors, or Unicode default-ignorable code points and contain only Unicode scalar values`
     );
   }
   if (new Set(parsed).size !== parsed.length) {
