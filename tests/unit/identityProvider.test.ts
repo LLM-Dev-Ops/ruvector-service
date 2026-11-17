@@ -938,6 +938,28 @@ describe('IAM-scoped identity provider', () => {
     expect(db.getClient).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['override-bearing cli_name', { cli_name: 'agentics\u202Ecli' }],
+    ['isolate-bearing cli_name', { cli_name: 'agentics\u2066cli' }],
+    ['override-bearing cli_version', { cli_version: '1.0\u202E.0' }],
+    ['isolate-bearing cli_version', { cli_version: '1.0\u2066.0' }],
+    ['override-bearing hostname', { hostname: 'work\u202Estation' }],
+    ['isolate-bearing hostname', { hostname: 'work\u2066station' }],
+  ])('rejects bidirectional-control %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed Unicode in key_name before identity or persistence access', async () => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
@@ -979,6 +1001,26 @@ describe('IAM-scoped identity provider', () => {
     ['NUL-bearing key_name', 'CLI\u0000Key'],
     ['newline-bearing key_name', 'CLI\nKey'],
   ])('rejects control-bearing %s before identity or persistence access', async (_case, keyName) => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: keyName },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['override-bearing key_name', 'CLI\u202EKey'],
+    ['isolate-bearing key_name', 'CLI\u2066Key'],
+  ])('rejects bidirectional-control %s before identity or persistence access', async (_case, keyName) => {
     const verify = jest.fn(() => {
       throw new Error('identity verification reached');
     });
