@@ -12,6 +12,10 @@ function hasUnicodeC0OrC1Control(value: string): boolean {
   });
 }
 
+function hasUnicodeFormatControl(value: string): boolean {
+  return /\p{Cf}/u.test(value);
+}
+
 function parseScopeList(value: string, name: string): string[] {
   let parsed: unknown;
   try {
@@ -28,10 +32,11 @@ function parseScopeList(value: string, name: string): string[] {
     scope.trim() !== scope ||
     !isWellFormedUnicode(scope) ||
     scope.normalize('NFC') !== scope ||
-    hasUnicodeC0OrC1Control(scope)
+    hasUnicodeC0OrC1Control(scope) ||
+    hasUnicodeFormatControl(scope)
   )) {
     throw new Error(
-      `${name} entries must be non-empty strings in exact NFC normalization without surrounding whitespace or Unicode C0/C1 control characters and contain only Unicode scalar values`
+      `${name} entries must be non-empty strings in exact NFC normalization without surrounding whitespace, Unicode C0/C1 control characters, or Unicode format controls and contain only Unicode scalar values`
     );
   }
   if (new Set(parsed).size !== parsed.length) {
