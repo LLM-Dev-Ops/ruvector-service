@@ -876,6 +876,42 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['cli_name', { cli_name: '\uD800' }],
+    ['cli_version', { cli_version: '\uD800' }],
+    ['hostname', { hostname: '\uD800' }],
+  ])('rejects malformed Unicode in %s before persistence access', async (_case, body) => {
+    const db = {
+      getClient: jest.fn(() => {
+        throw new Error('persistence access reached');
+      }),
+    };
+
+    await expect(createCliSessionHandler(
+      { body } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed Unicode in key_name before identity or persistence access', async () => {
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', key_name: '\uD800' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['duplicate allowed scopes', 'allowedScopes', '["platform:read","platform:read"]'],
     ['whitespace-padded allowed scopes', 'allowedScopes', '[" platform:read"]'],
     ['duplicate default scopes', 'defaultScopes', '["platform:read","platform:read"]'],
