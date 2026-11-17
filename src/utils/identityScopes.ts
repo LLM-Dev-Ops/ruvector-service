@@ -19,10 +19,11 @@ function parseScopeList(value: string, name: string): string[] {
     typeof scope !== 'string' ||
     scope.length === 0 ||
     scope.trim() !== scope ||
-    !isWellFormedUnicode(scope)
+    !isWellFormedUnicode(scope) ||
+    scope.normalize('NFC') !== scope
   )) {
     throw new Error(
-      `${name} entries must be non-empty strings without surrounding whitespace and contain only Unicode scalar values`
+      `${name} entries must be non-empty strings in exact NFC normalization without surrounding whitespace and contain only Unicode scalar values`
     );
   }
   if (new Set(parsed).size !== parsed.length) {
