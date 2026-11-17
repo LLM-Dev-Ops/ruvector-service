@@ -1353,6 +1353,22 @@ describe('IAM-scoped identity provider', () => {
   });
 
   it.each([
+    ['BMP variation selector', 'platform:\uFE0Fread'],
+    ['supplementary variation selector', 'platform:\u{E0100}read'],
+  ])('fails closed at request time for %s scope configuration', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: {} } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 503, code: 'identity_configuration_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['BMP private-use code point', 'platform:\uE000read'],
     ['supplementary private-use code point', 'platform:\u{F0000}read'],
   ])('fails closed at request time for %s scope configuration', async (_case, scope) => {
@@ -1468,6 +1484,22 @@ describe('IAM-scoped identity provider', () => {
     ['fullwidth read prefix', 'platform:\uFF52ead'],
     ['fullwidth write prefix', 'platform:\uFF57rite'],
   ])('rejects compatibility-equivalent %s create-request scope before persistence access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const db = { getClient: jest.fn() };
+
+    await expect(createCliSessionHandler(
+      { body: { scopes: [scope] } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ code: 'validation_error' });
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['BMP variation selector', 'platform:\uFE0Fread'],
+    ['supplementary variation selector', 'platform:\u{E0100}read'],
+  ])('rejects %s create-request scope before persistence access', async (_case, scope) => {
     config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
     config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
     const db = { getClient: jest.fn() };
@@ -1602,6 +1634,28 @@ describe('IAM-scoped identity provider', () => {
     ['fullwidth read prefix', 'platform:\uFF52ead'],
     ['fullwidth write prefix', 'platform:\uFF57rite'],
   ])('rejects compatibility-equivalent %s authorization-request scope before identity access', async (_case, scope) => {
+    config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
+    config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
+    const verify = jest.fn(() => {
+      throw new Error('identity verification reached');
+    });
+    const db = { getClient: jest.fn() };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' },
+      body: { session_code: 'ABCDEFGH', scopes: [scope] },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), db as never, verify)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(db.getClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['BMP variation selector', 'platform:\uFE0Fread'],
+    ['supplementary variation selector', 'platform:\u{E0100}read'],
+  ])('rejects %s authorization-request scope before identity access', async (_case, scope) => {
     config.dataPlaneIdentity.allowedScopes = JSON.stringify([scope]);
     config.dataPlaneIdentity.defaultScopes = JSON.stringify([scope]);
     const verify = jest.fn(() => {
