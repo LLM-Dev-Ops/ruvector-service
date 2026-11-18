@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { PoolClient } from 'pg';
 import {
   IdentityApiKeyLookupSchema,
+  IdentityApiKeyIdSchema,
   IdentityApiKeyResponseSchema,
   IdentityCliSessionAuthorizeSchema,
   IdentityCliSessionAuthorizedSchema,
@@ -272,7 +273,11 @@ async function lockActiveApiKey(
     [keyId, organizationId]
   );
   const key = locked.rows[0];
-  if (!key || !isCurrentScopeList(key.scopes)) return undefined;
+  if (
+    !key ||
+    !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
+    !isCurrentScopeList(key.scopes)
+  ) return undefined;
 
   return await isLockedApiKeyActive(client, keyId, organizationId) ? key : undefined;
 }
@@ -310,6 +315,7 @@ async function lockActiveApiKeyByHash(
   const key = locked.rows[0];
   if (
     !key ||
+    !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
     !IdentityOrganizationIdSchema.safeParse(key.organization_id).success ||
     !isCurrentScopeList(key.scopes)
   ) return undefined;
@@ -565,13 +571,14 @@ export async function authorizeCliSessionHandler(
     let replayKeyId: string | undefined;
     if (session.status === 'completed') {
       const persistedKeyId = session.key_id;
+      const parsedPersistedKeyId = IdentityApiKeyIdSchema.safeParse(persistedKeyId);
       if (session.organization_id !== membership.organization_id
         || session.authorized_issuer !== membership.issuer
         || session.authorized_subject !== membership.subject
-        || !persistedKeyId) {
+        || !parsedPersistedKeyId.success) {
         throw new AppError(409, 'session_already_authorized', 'CLI session was authorized by another identity');
       }
-      replayKeyId = persistedKeyId;
+      replayKeyId = parsedPersistedKeyId.data;
     }
     // NOW() is fixed at transaction start in PostgreSQL. Re-read expiry from
     // the persistence wall clock only after the session row lock is held so a
@@ -747,11 +754,13 @@ export async function pollCliSessionHandler(
       res.status(200).json(pendingResponse);
       return;
     }
+    const parsedSessionKeyId = IdentityApiKeyIdSchema.safeParse(session.key_id);
     if (!session.organization_id || !IdentityOrganizationIdSchema.safeParse(session.organization_id).success
-      || !session.key_id
+      || !parsedSessionKeyId.success
       || !session.authorized_issuer || !session.authorized_subject) {
       throw new AppError(500, 'invalid_session_identity', 'Completed CLI session lacks tenant identity');
     }
+    const sessionKeyId = parsedSessionKeyId.data;
     const membershipResult = await client.query<CliSessionMembershipRow>(
       `SELECT email, payment_status, role
          FROM data_plane_identity_memberships
@@ -801,7 +810,7 @@ export async function pollCliSessionHandler(
     // after the one-time key copy is erased. Bind every completed poll to the
     // referenced active key so revocation, expiry, or scope retirement also
     // closes that post-delivery metadata path.
-    const activeKey = await lockActiveApiKey(client, session.key_id, session.organization_id);
+    const activeKey = await lockActiveApiKey(client, sessionKeyId, session.organization_id);
     if (!activeKey) {
       throw new AppError(410, 'session_api_key_inactive', 'Authorized API key is no longer active');
     }
@@ -810,7 +819,7 @@ export async function pollCliSessionHandler(
         session.encrypted_api_key,
         session.session_code,
         session.organization_id,
-        session.key_id
+        sessionKeyId
       )
       : undefined;
     if (plaintextKey !== undefined) {

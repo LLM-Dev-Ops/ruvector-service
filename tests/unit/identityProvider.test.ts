@@ -139,6 +139,56 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it('fails closed before key activity evaluation for a malformed persisted API-key identifier', async () => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'not-a-canonical-uuid',
+        organization_id: 'org-test', name: 'cli', scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'), expires_at: null, last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      return { rows: [] };
+    });
+
+    await expect(lookupApiKeyHandler(
+      { body: { key_hash: keyHash } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'api_key_not_found' });
+
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('AS is_active'), expect.anything());
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+  });
+
+  it('fails closed before entitlement access for a malformed persisted API-key identifier', async () => {
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'not-a-canonical-uuid',
+        organization_id: 'org-test', name: 'cli', scopes: ['simulation:run'],
+        created_at: new Date('2026-11-12T00:00:00Z'), expires_at: null, last_used_at: null,
+      }] };
+      if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        organization_id: 'org-test', plan: 'developer', max_requests: '10000',
+        max_tokens: '1000000', max_api_keys: '10',
+      }] };
+      return { rows: [] };
+    });
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request,
+      response(),
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'entitlement_not_found' });
+
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('AS is_active'), expect.anything());
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_identity_organizations'),
+      expect.anything()
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+  });
+
   it.each([
     ['raw API key', { api_key: 'ag_live_secret' }],
     ['caller organization', { key_hash: keyHash, organization_id: 'attacker-org' }],
@@ -2733,6 +2783,36 @@ describe('IAM-scoped identity provider', () => {
     );
   });
 
+  it('rejects a malformed completed-session API-key identifier before membership access', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) return { rows: [{ is_unexpired: true }] };
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'not-a-canonical-uuid',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: null, key_delivered_at: '2030-01-01T00:05:00Z',
+          expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      response(), { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_session_identity' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_identity_memberships'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_api_keys'), expect.anything()
+    );
+  });
+
   it.each([
     ['uppercase', 'Owner@Example.test'],
     ['whitespace-padded', 'owner@example.test '],
@@ -3196,7 +3276,8 @@ describe('IAM-scoped identity provider', () => {
         query: jest.fn(async (sql: string) => {
           if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
           if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
-            session_code: 'ABCDEFGH', requested_scopes: ['platform:read'], key_id: 'key',
+            session_code: 'ABCDEFGH', requested_scopes: ['platform:read'],
+            key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
             organization_id: null, encrypted_api_key: null, authorized_issuer: null,
             authorized_subject: null, ...session,
           }] };
@@ -3204,7 +3285,8 @@ describe('IAM-scoped identity provider', () => {
             email: 'owner@example.test', payment_status: 'paid', role: 'owner',
           }] };
           if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
-            key_id: 'key', key_hash: 'a'.repeat(64), scopes: ['platform:read'],
+            key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+            key_hash: 'a'.repeat(64), scopes: ['platform:read'],
           }] };
           return { rows: [] };
         }),
