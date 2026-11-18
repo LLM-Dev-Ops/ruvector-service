@@ -10,6 +10,7 @@ import {
   IdentityCliSessionCreateSchema,
   IdentityCliSessionCreatedSchema,
   IdentityCliSessionPollSchema,
+  IdentityCliSessionStatusSchema,
   IdentityEntitlementResponseSchema,
   IdentityMembershipEmailSchema,
   IdentityMembershipPaymentStatusSchema,
@@ -57,7 +58,7 @@ interface IdentityMembershipRow {
 
 interface CliSessionRow {
   session_code: string;
-  status: 'pending' | 'completed';
+  status: unknown;
   requested_scopes: string[];
   organization_id: string | null;
   key_id: string | null;
@@ -565,11 +566,16 @@ export async function authorizeCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    const parsedSessionStatus = IdentityCliSessionStatusSchema.safeParse(session.status);
+    if (!parsedSessionStatus.success) {
+      throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
+    }
+    const sessionStatus = parsedSessionStatus.data;
     // A completed session is already bound to its original authorizing
     // identity. Enforce that binding immediately after the session row lock,
     // before expiry or key-state reads can disclose anything to another owner.
     let replayKeyId: string | undefined;
-    if (session.status === 'completed') {
+    if (sessionStatus === 'completed') {
       const persistedKeyId = session.key_id;
       const parsedPersistedKeyId = IdentityApiKeyIdSchema.safeParse(persistedKeyId);
       if (session.organization_id !== membership.organization_id
@@ -746,8 +752,13 @@ export async function pollCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    const parsedSessionStatus = IdentityCliSessionStatusSchema.safeParse(session.status);
+    if (!parsedSessionStatus.success) {
+      throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
+    }
+    const sessionStatus = parsedSessionStatus.data;
     await assertCliSessionUnexpired(client, session.session_code);
-    if (session.status === 'pending') {
+    if (sessionStatus === 'pending') {
       const pendingResponse = IdentityCliSessionPollSchema.parse({ status: 'pending' });
       await assertCliSessionUnexpired(client, session.session_code);
       await client.query('COMMIT');
