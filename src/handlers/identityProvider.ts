@@ -819,6 +819,14 @@ export async function pollCliSessionHandler(
         'Persisted CLI session delivery timestamp is invalid'
       );
     }
+    if (sessionStatus === 'completed' && session.encrypted_api_key !== null &&
+        typeof session.encrypted_api_key !== 'string') {
+      throw new AppError(
+        500,
+        'invalid_encrypted_session_key',
+        'Persisted CLI key envelope is invalid'
+      );
+    }
     if (sessionStatus === 'pending') {
       await assertCliSessionUnexpired(client, session.session_code);
       const pendingResponse = IdentityCliSessionPollSchema.parse({ status: 'pending' });
