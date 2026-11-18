@@ -19,7 +19,7 @@ export function decodeEntitlementContext(encodedContext: string): EntitlementCon
   try {
     const decoded = Buffer.from(encodedContext, 'base64').toString('utf-8');
     return JSON.parse(decoded) as EntitlementContext;
-  } catch (error) {
+  } catch {
     throw new Error('Entitlement decode error');
   }
 }
@@ -72,7 +72,7 @@ export function checkEntitlement(entitlementContext: string | undefined): Entitl
       scope: parsed.scope
     };
 
-  } catch (error) {
+  } catch {
     // SPARC: CATCH error → RETURN { allowed: false, reason: 'Entitlement decode error' }
     return {
       allowed: false,

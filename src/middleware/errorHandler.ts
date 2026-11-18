@@ -62,7 +62,7 @@ export function errorHandler(
       error: 'validation_error',
       message: 'Request validation failed',
       correlationId,
-      details: err.errors.map(e => ({
+      details: err.issues.map(e => ({
         path: e.path.join('.'),
         message: e.message,
       })),
@@ -71,7 +71,7 @@ export function errorHandler(
     errorTotal.inc({ type: 'validation_error', endpoint: req.path });
 
     logger.warn(
-      { correlationId, errors: err.errors, endpoint: req.path },
+      { correlationId, errors: err.issues, endpoint: req.path },
       'Validation error'
     );
 

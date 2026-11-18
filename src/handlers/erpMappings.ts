@@ -68,7 +68,7 @@ export async function createErpMappingHandler(
       res.status(400).json({
         error: 'validation_error',
         message: 'Request validation failed',
-        details: error.errors.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+        details: error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
         execution_metadata: executionMetadata,
       });
       return;

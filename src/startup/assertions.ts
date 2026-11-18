@@ -7,6 +7,16 @@
 import logger from '../utils/logger';
 import { config, configDeprecations } from '../config';
 import { assertValidDimension } from '../clients/vectorSchema';
+import {
+  parseIdentityCallerPrincipals,
+  parsePrincipalOrgBindings,
+  parseServiceAudience,
+} from '../utils/principalBindings';
+import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
+import {
+  parseEndUserJwtConfiguration,
+  parseVerificationUrlConfiguration,
+} from '../utils/identityJwtConfiguration';
 
 /**
  * Required environment variables for production operation.
@@ -18,6 +28,16 @@ const REQUIRED_ENV_VARS_PRODUCTION = [
   'RUVVECTOR_DB_USER',
   'RUVVECTOR_DB_PASSWORD',
   'EXECUTION_HMAC_SECRET',
+  'RUVVECTOR_SERVICE_AUDIENCE',
+  'RUVVECTOR_PRINCIPAL_ORG_BINDINGS',
+  'RUVVECTOR_IDENTITY_CALLER_PRINCIPALS',
+  'RUVVECTOR_IDENTITY_JWT_ISSUER',
+  'RUVVECTOR_IDENTITY_JWT_AUDIENCE',
+  'RUVVECTOR_IDENTITY_JWKS_URI',
+  'RUVVECTOR_IDENTITY_VERIFICATION_URL',
+  'RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY',
+  'RUVVECTOR_IDENTITY_ALLOWED_SCOPES',
+  'RUVVECTOR_IDENTITY_DEFAULT_SCOPES',
   // Has no default and hard-crashes assertEmbeddingDimension() when unset; listing it
   // here is what makes the reported "missing" count reflect what can actually crash startup.
   'RUVVECTOR_EMBEDDING_DIM',
@@ -42,6 +62,76 @@ const OPTIONAL_ENV_VARS = [
   'MAX_LATENCY_MS',
   'EXECUTION_ACCEPTANCE_TIMEOUT_MS',
 ] as const;
+
+export function assertDataPlaneIdentity(): void {
+  const audience = config.dataPlaneIdentity.serviceAudience;
+  if (!audience) {
+    throw new Error('FATAL: RUVVECTOR_SERVICE_AUDIENCE is required for tenant-bound data-plane routes.');
+  }
+  try {
+    parseServiceAudience(audience);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Service audience is invalid';
+    const detail = reason.replace(/^Service audience /, '');
+    throw new Error(`FATAL: RUVVECTOR_SERVICE_AUDIENCE ${detail}.`);
+  }
+
+  try {
+    parsePrincipalOrgBindings(config.dataPlaneIdentity.principalOrgBindings);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Principal bindings are invalid';
+    const detail = reason.replace(/^Principal bindings /, '');
+    throw new Error(`FATAL: RUVVECTOR_PRINCIPAL_ORG_BINDINGS ${detail}.`);
+  }
+
+  try {
+    parseIdentityCallerPrincipals(config.dataPlaneIdentity.identityCallerPrincipals);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Identity caller principals are invalid';
+    const detail = reason.replace(/^Identity caller principals /, '');
+    throw new Error(`FATAL: RUVVECTOR_IDENTITY_CALLER_PRINCIPALS ${detail}.`);
+  }
+
+  for (const [name, value] of [
+    ['RUVVECTOR_IDENTITY_JWT_ISSUER', config.dataPlaneIdentity.jwtIssuer],
+    ['RUVVECTOR_IDENTITY_JWT_AUDIENCE', config.dataPlaneIdentity.jwtAudience],
+    ['RUVVECTOR_IDENTITY_JWKS_URI', config.dataPlaneIdentity.jwksUri],
+    ['RUVVECTOR_IDENTITY_VERIFICATION_URL', config.dataPlaneIdentity.verificationUrl],
+  ] as const) {
+    if (!value) throw new Error(`FATAL: ${name} is required for CLI identity sessions.`);
+  }
+  try {
+    parseEndUserJwtConfiguration({
+      issuer: config.dataPlaneIdentity.jwtIssuer,
+      audience: config.dataPlaneIdentity.jwtAudience,
+      jwksUri: config.dataPlaneIdentity.jwksUri,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'JWT verification configuration is invalid';
+    throw new Error(`FATAL: ${reason}.`);
+  }
+  try {
+    parseVerificationUrlConfiguration(config.dataPlaneIdentity.verificationUrl);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'CLI verification URL is invalid';
+    throw new Error(`FATAL: ${reason}.`);
+  }
+
+  const encryptionKey = Buffer.from(config.dataPlaneIdentity.sessionEncryptionKey, 'base64');
+  if (encryptionKey.length !== 32 || encryptionKey.toString('base64') !== config.dataPlaneIdentity.sessionEncryptionKey) {
+    throw new Error('FATAL: RUVVECTOR_IDENTITY_SESSION_ENCRYPTION_KEY must be canonical base64 for exactly 32 bytes.');
+  }
+
+  try {
+    parseIdentityScopeConfiguration(
+      config.dataPlaneIdentity.allowedScopes,
+      config.dataPlaneIdentity.defaultScopes
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Identity scope configuration is invalid';
+    throw new Error(`FATAL: ${reason}.`);
+  }
+}
 
 export interface AssertionResult {
   valid: boolean;
@@ -227,6 +317,7 @@ export function runStartupAssertions(): {
   const maxLatencyMs = assertPerformanceBudget();
   assertEmbeddingDimension();
   assertExecutionAuthority();
+  assertDataPlaneIdentity();
   assertMemoryLayerRole();
 
   logger.info('All startup assertions passed');
@@ -239,6 +330,7 @@ export default {
   assertPerformanceBudget,
   assertEmbeddingDimension,
   assertExecutionAuthority,
+  assertDataPlaneIdentity,
   assertMemoryLayerRole,
   runStartupAssertions,
 };

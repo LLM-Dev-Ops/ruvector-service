@@ -56,7 +56,7 @@ export const createDeploymentSchema = z.object({
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
   version: z.number().int().positive().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 // Validation schema for updating a deployment
@@ -66,7 +66,7 @@ export const updateDeploymentSchema = z.object({
   execution: executionSchema.nullable().optional(),
   updated_at: z.string().optional(),
   version: z.number().int().positive().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 /**
@@ -148,12 +148,12 @@ export async function createDeploymentHandler(
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Deployment validation failed');
+      logger.warn({ correlationId, errors: error.issues }, 'Deployment validation failed');
       res.status(400).json({
         error: 'validation_error',
         message: 'Request validation failed',
         correlationId,
-        details: error.errors.map(e => ({
+        details: error.issues.map(e => ({
           path: e.path.join('.'),
           message: e.message,
         })),
@@ -390,12 +390,12 @@ export async function updateDeploymentHandler(
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      logger.warn({ correlationId, errors: error.errors }, 'Deployment update validation failed');
+      logger.warn({ correlationId, errors: error.issues }, 'Deployment update validation failed');
       res.status(400).json({
         error: 'validation_error',
         message: 'Request validation failed',
         correlationId,
-        details: error.errors.map(e => ({
+        details: error.issues.map(e => ({
           path: e.path.join('.'),
           message: e.message,
         })),

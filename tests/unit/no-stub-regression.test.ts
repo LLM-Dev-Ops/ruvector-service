@@ -57,3 +57,18 @@ describe('configuration defaults', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('identity entitlement storage', () => {
+  const databaseClient = readFileSync(join(CLIENTS_DIR, 'DatabaseClient.ts'), 'utf8');
+
+  it('preserves the full safe-integer API-key limit range for new and existing tables', () => {
+    expect(databaseClient).toMatch(/max_api_keys BIGINT NOT NULL/);
+    expect(databaseClient).toMatch(
+      /BEGIN;[\s\S]*DROP VIEW IF EXISTS data_plane_identity_lookup;[\s\S]*ALTER TABLE data_plane_identity_organizations[\s\S]*ALTER COLUMN max_api_keys TYPE BIGINT;[\s\S]*CREATE VIEW data_plane_identity_lookup AS[\s\S]*COMMIT;/
+    );
+    expect(databaseClient).toMatch(
+      /CREATE VIEW data_plane_identity_lookup AS[\s\S]*k\.scopes/
+    );
+    expect(databaseClient).not.toMatch(/max_api_keys INTEGER NOT NULL/);
+  });
+});
