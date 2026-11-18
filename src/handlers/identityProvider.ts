@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { PoolClient } from 'pg';
 import {
   IdentityApiKeyLookupSchema,
+  IdentityApiKeyHashSchema,
   IdentityApiKeyIdSchema,
   IdentityApiKeyResponseSchema,
   IdentityCliSessionAuthorizeSchema,
@@ -284,6 +285,7 @@ async function lockActiveApiKey(
   if (
     !key ||
     !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
+    !IdentityApiKeyHashSchema.safeParse(key.key_hash).success ||
     !isCurrentScopeList(key.scopes)
   ) return undefined;
 
