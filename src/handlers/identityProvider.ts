@@ -11,6 +11,7 @@ import {
   IdentityCliSessionPollSchema,
   IdentityEntitlementResponseSchema,
   IdentityMembershipEmailSchema,
+  IdentityMembershipPaymentStatusSchema,
   IdentityOrganizationIdSchema,
 } from '@llm-dev-ops/contracts';
 import { DatabaseClient } from '../clients/DatabaseClient';
@@ -533,6 +534,13 @@ export async function authorizeCliSessionHandler(
         'Verified user tenant membership is invalid'
       );
     }
+    if (!IdentityMembershipPaymentStatusSchema.safeParse(membership.payment_status).success) {
+      throw new AppError(
+        403,
+        'identity_membership_invalid',
+        'Verified user tenant membership is invalid'
+      );
+    }
     if (membership.role !== 'owner') {
       throw new AppError(403, 'identity_owner_required', 'Only an active tenant owner may authorize CLI API keys');
     }
@@ -764,6 +772,13 @@ export async function pollCliSessionHandler(
     }
     const membership = membershipResult.rows[0];
     if (!IdentityMembershipEmailSchema.safeParse(membership.email).success) {
+      throw new AppError(
+        500,
+        'invalid_session_membership',
+        'Completed CLI session tenant membership is invalid'
+      );
+    }
+    if (!IdentityMembershipPaymentStatusSchema.safeParse(membership.payment_status).success) {
       throw new AppError(
         500,
         'invalid_session_membership',

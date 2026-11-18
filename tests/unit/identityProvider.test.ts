@@ -814,6 +814,31 @@ describe('IAM-scoped identity provider', () => {
     );
   });
 
+  it('rejects an invalid persisted membership payment status before CLI session access', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-1', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'overdue', role: 'owner',
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer verified-user-jwt' },
+    } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toMatchObject({ statusCode: 403, code: 'identity_membership_invalid' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_cli_sessions'), expect.anything()
+    );
+  });
+
   it.each([
     ['at the active key limit', { max_api_keys: 2, active_api_keys: 2 }, 'api_key_limit_reached', 409],
     ['with a missing entitlement row', null, 'invalid_api_key_entitlement', 500],
@@ -2727,6 +2752,36 @@ describe('IAM-scoped identity provider', () => {
         }] };
         if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
           email, payment_status: 'paid', role: 'owner',
+        }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      response(), { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_session_membership' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_api_keys'), expect.anything()
+    );
+  });
+
+  it('rejects an invalid persisted membership payment status before key access', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS is_unexpired')) return { rows: [{ is_unexpired: true }] };
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: 'https://identity.test/auth/v1', authorized_subject: 'user-1',
+          encrypted_api_key: null, key_delivered_at: '2030-01-01T00:05:00Z',
+          expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'overdue', role: 'owner',
         }] };
         return { rows: [] };
       }),
