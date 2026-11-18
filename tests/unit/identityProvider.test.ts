@@ -2659,6 +2659,59 @@ describe('IAM-scoped identity provider', () => {
     expect(res.json).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['issuer', 'https://other-identity.test/auth/v1', 'user-1'],
+    ['subject', 'https://identity.test/auth/v1', ' user-1'],
+  ])('rejects an invalid persisted authorizing %s before polling expiry or membership access', async (
+    _case,
+    authorizedIssuer,
+    authorizedSubject
+  ) => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_cli_sessions s')) return { rows: [{
+          session_code: 'ABCDEFGH', status: 'completed', requested_scopes: ['platform:read'],
+          organization_id: 'org-test', key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          authorized_issuer: authorizedIssuer, authorized_subject: authorizedSubject,
+          encrypted_api_key: null, key_delivered_at: '2030-01-01T00:01:00Z',
+          expires_at: '2030-01-01T00:10:00Z',
+        }] };
+        if (sql.includes('AS is_unexpired')) return { rows: [{ is_unexpired: false }] };
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_api_keys')) return { rows: [{
+          key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415',
+          key_hash: 'a'.repeat(64), scopes: ['platform:read'],
+        }] };
+        if (sql.includes('AS is_active')) return { rows: [{ is_active: true }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const res = response();
+
+    await expect(pollCliSessionHandler(
+      { params: { device_code: 'e'.repeat(64) } } as unknown as Request,
+      res,
+      { getClient: jest.fn().mockResolvedValue(client) } as never
+    )).rejects.toMatchObject({ statusCode: 500, code: 'invalid_session_identity' });
+
+    const sessionLockIndex = client.query.mock.calls.findIndex(([sql]) =>
+      /FROM data_plane_cli_sessions s[\s\S]*FOR UPDATE/.test(String(sql)));
+    expect(sessionLockIndex).toBeGreaterThan(-1);
+    expect(client.query.mock.calls.slice(sessionLockIndex + 1).some(([sql]) =>
+      String(sql).includes('AS is_unexpired'))).toBe(false);
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_identity_memberships'), expect.anything()
+    );
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM data_plane_api_keys'), expect.anything()
+    );
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('rechecks session expiry after membership and key locks before one-time delivery', async () => {
     const deviceCode = 'b'.repeat(64);
     const plaintext = `agentics_sk_cli_${'c'.repeat(64)}`;

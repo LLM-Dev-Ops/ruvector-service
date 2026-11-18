@@ -11,6 +11,8 @@ import {
   IdentityCliSessionCreatedSchema,
   IdentityCliSessionPollSchema,
   IdentityCliSessionStatusSchema,
+  IdentityEndUserIssuerSchema,
+  IdentityEndUserSubjectSchema,
   IdentityEntitlementResponseSchema,
   IdentityMembershipEmailSchema,
   IdentityMembershipPaymentStatusSchema,
@@ -20,7 +22,10 @@ import { DatabaseClient } from '../clients/DatabaseClient';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { VerifiedEndUser, verifyEndUserJwt } from '../utils/identityJwt';
-import { parseVerificationUrlConfiguration } from '../utils/identityJwtConfiguration';
+import {
+  parseEndUserJwtConfiguration,
+  parseVerificationUrlConfiguration,
+} from '../utils/identityJwtConfiguration';
 import { parseIdentityScopeConfiguration } from '../utils/identityScopes';
 import { readSingleHeader } from '../utils/httpHeaders';
 
@@ -757,18 +762,42 @@ export async function pollCliSessionHandler(
       throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
     }
     const sessionStatus = parsedSessionStatus.data;
-    await assertCliSessionUnexpired(client, session.session_code);
     if (sessionStatus === 'pending') {
+      await assertCliSessionUnexpired(client, session.session_code);
       const pendingResponse = IdentityCliSessionPollSchema.parse({ status: 'pending' });
       await assertCliSessionUnexpired(client, session.session_code);
       await client.query('COMMIT');
       res.status(200).json(pendingResponse);
       return;
     }
+    let jwtConfiguration;
+    try {
+      jwtConfiguration = parseEndUserJwtConfiguration({
+        issuer: config.dataPlaneIdentity.jwtIssuer,
+        audience: config.dataPlaneIdentity.jwtAudience,
+        jwksUri: config.dataPlaneIdentity.jwksUri,
+      });
+    } catch (error) {
+      throw new AppError(
+        503,
+        'identity_configuration_error',
+        error instanceof Error ? error.message : 'JWT verification configuration is invalid'
+      );
+    }
+    const parsedAuthorizedIssuer = IdentityEndUserIssuerSchema.safeParse(session.authorized_issuer);
+    const parsedAuthorizedSubject = IdentityEndUserSubjectSchema.safeParse(session.authorized_subject);
+    if (!parsedAuthorizedIssuer.success || parsedAuthorizedIssuer.data !== jwtConfiguration.issuer
+      || !parsedAuthorizedSubject.success) {
+      throw new AppError(
+        500,
+        'invalid_session_identity',
+        'Completed CLI session lacks canonical authorizing identity'
+      );
+    }
+    await assertCliSessionUnexpired(client, session.session_code);
     const parsedSessionKeyId = IdentityApiKeyIdSchema.safeParse(session.key_id);
     if (!session.organization_id || !IdentityOrganizationIdSchema.safeParse(session.organization_id).success
-      || !parsedSessionKeyId.success
-      || !session.authorized_issuer || !session.authorized_subject) {
+      || !parsedSessionKeyId.success) {
       throw new AppError(500, 'invalid_session_identity', 'Completed CLI session lacks tenant identity');
     }
     const sessionKeyId = parsedSessionKeyId.data;
@@ -778,7 +807,7 @@ export async function pollCliSessionHandler(
         WHERE issuer = $1 AND subject = $2 AND organization_id = $3
           AND is_active = TRUE
         FOR SHARE`,
-      [session.authorized_issuer, session.authorized_subject, session.organization_id]
+      [parsedAuthorizedIssuer.data, parsedAuthorizedSubject.data, session.organization_id]
     );
     if (membershipResult.rows.length === 0) {
       throw new AppError(403, 'session_membership_inactive', 'Authorizing tenant membership is no longer active');
