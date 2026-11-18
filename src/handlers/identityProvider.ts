@@ -412,7 +412,11 @@ export async function lookupEntitlementHandler(
       [key.organization_id]
     );
     const row = result.rows[0];
-    if (!row) {
+    if (
+      !row ||
+      !IdentityOrganizationIdSchema.safeParse(row.organization_id).success ||
+      row.organization_id !== key.organization_id
+    ) {
       throw new AppError(404, 'entitlement_not_found', 'Entitlement is not available for an active API key');
     }
 

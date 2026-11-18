@@ -225,6 +225,37 @@ describe('IAM-scoped identity provider', () => {
     });
   });
 
+  it('fails closed when a locked entitlement row is bound to another tenant', async () => {
+    let activityChecks = 0;
+    const { db, client } = transactionalDb(async (sql) => {
+      if (sql.includes('WHERE key_hash = $1')) return { rows: [{
+        key_id: 'c433a3fa-1d07-4e56-bf30-b9019c7f1415', organization_id: 'org-test',
+        name: 'CLI Key', scopes: ['simulation:run'],
+      }] };
+      if (sql.includes('AS is_active')) {
+        activityChecks += 1;
+        return { rows: [{ is_active: true }] };
+      }
+      if (sql.includes('FROM data_plane_identity_organizations')) return { rows: [{
+        organization_id: 'org-other', plan: 'enterprise', max_requests: '10000',
+        max_tokens: '1000000', max_api_keys: '10',
+      }] };
+      return { rows: [] };
+    });
+    const res = response();
+
+    await expect(lookupEntitlementHandler(
+      { body: { key_hash: keyHash } } as Request,
+      res,
+      db as never
+    )).rejects.toMatchObject({ statusCode: 404, code: 'entitlement_not_found' });
+
+    expect(activityChecks).toBe(1);
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['control-bearing', 'org\u0000admin'],
     ['malformed Unicode', 'org\uD800admin'],
