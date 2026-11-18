@@ -89,6 +89,7 @@ interface CliSessionMembershipRow {
 
 interface ActiveApiKeyRow {
   key_id: string;
+  organization_id: string;
   key_hash: string;
   name: string;
   scopes: unknown;
@@ -279,7 +280,7 @@ async function lockActiveApiKey(
   organizationId: string
 ): Promise<ActiveApiKeyRow | undefined> {
   const locked = await client.query<ActiveApiKeyRow>(
-    `SELECT key_id, key_hash, name, scopes
+    `SELECT key_id, organization_id, key_hash, name, scopes
        FROM data_plane_api_keys
       WHERE key_id = $1 AND organization_id = $2
       FOR SHARE`,
@@ -289,6 +290,9 @@ async function lockActiveApiKey(
   if (
     !key ||
     !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
+    key.key_id !== keyId ||
+    !IdentityOrganizationIdSchema.safeParse(key.organization_id).success ||
+    key.organization_id !== organizationId ||
     !IdentityApiKeyHashSchema.safeParse(key.key_hash).success ||
     !IdentityApiKeyNameSchema.safeParse(key.name).success ||
     !isCurrentScopeList(key.scopes)
