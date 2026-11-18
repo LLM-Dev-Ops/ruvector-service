@@ -25,7 +25,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@llm-dev-ops/contracts": "github:LLM-Dev-Ops/agentics-contracts#f2906535af9c276be80432dedc0fc58aba4f0b05",
+    "@llm-dev-ops/contracts": "github:LLM-Dev-Ops/agentics-contracts#3c209faba5135dd16abecbd71fd84ba14ac85db3",
     "dotenv": "^16.3.1",
     "express": "4.22.3",
     "jsonwebtoken": "9.0.3",
