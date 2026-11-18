@@ -518,6 +518,13 @@ export async function authorizeCliSessionHandler(
       );
     }
     const membership = membershipResult.rows[0];
+    if (!IdentityOrganizationIdSchema.safeParse(membership.organization_id).success) {
+      throw new AppError(
+        403,
+        'identity_membership_invalid',
+        'Verified user tenant membership is invalid'
+      );
+    }
     if (membership.role !== 'owner') {
       throw new AppError(403, 'identity_owner_required', 'Only an active tenant owner may authorize CLI API keys');
     }
@@ -724,7 +731,8 @@ export async function pollCliSessionHandler(
       res.status(200).json(pendingResponse);
       return;
     }
-    if (!session.organization_id || !session.key_id
+    if (!session.organization_id || !IdentityOrganizationIdSchema.safeParse(session.organization_id).success
+      || !session.key_id
       || !session.authorized_issuer || !session.authorized_subject) {
       throw new AppError(500, 'invalid_session_identity', 'Completed CLI session lacks tenant identity');
     }
