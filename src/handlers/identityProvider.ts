@@ -79,6 +79,9 @@ interface CliSessionRow {
 }
 
 interface CliSessionMembershipRow {
+  issuer: string;
+  subject: string;
+  organization_id: string;
   email: string;
   payment_status: 'paid' | 'unpaid' | 'trial' | 'internal';
   role: 'owner';
@@ -834,7 +837,7 @@ export async function pollCliSessionHandler(
     }
     const sessionKeyId = parsedSessionKeyId.data;
     const membershipResult = await client.query<CliSessionMembershipRow>(
-      `SELECT email, payment_status, role
+      `SELECT issuer, subject, organization_id, email, payment_status, role
          FROM data_plane_identity_memberships
         WHERE issuer = $1 AND subject = $2 AND organization_id = $3
           AND is_active = TRUE
@@ -852,6 +855,19 @@ export async function pollCliSessionHandler(
       );
     }
     const membership = membershipResult.rows[0];
+    const parsedMembershipIssuer = IdentityEndUserIssuerSchema.safeParse(membership.issuer);
+    const parsedMembershipSubject = IdentityEndUserSubjectSchema.safeParse(membership.subject);
+    const parsedMembershipOrganizationId = IdentityOrganizationIdSchema.safeParse(membership.organization_id);
+    if (!parsedMembershipIssuer.success || parsedMembershipIssuer.data !== parsedAuthorizedIssuer.data
+      || !parsedMembershipSubject.success || parsedMembershipSubject.data !== parsedAuthorizedSubject.data
+      || !parsedMembershipOrganizationId.success
+      || parsedMembershipOrganizationId.data !== session.organization_id) {
+      throw new AppError(
+        500,
+        'session_membership_mismatch',
+        'Completed CLI session membership binding is invalid'
+      );
+    }
     if (!IdentityMembershipEmailSchema.safeParse(membership.email).success) {
       throw new AppError(
         500,
