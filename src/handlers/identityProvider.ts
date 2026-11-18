@@ -259,6 +259,16 @@ function timestamp(value: Date | string | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
+function isCanonicalPersistedDeliveryTimestamp(value: unknown): value is Date | string {
+  if (value instanceof Date) return Number.isFinite(value.getTime());
+  if (typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const canonical = parsed.toISOString();
+  return value === canonical || value === canonical.replace(/\.000Z$/, 'Z');
+}
+
 function entitlementInteger(value: number | string, field: string): number {
   if (typeof value === 'number') {
     if (Number.isSafeInteger(value) && value >= 0) return value;
@@ -801,6 +811,14 @@ export async function pollCliSessionHandler(
       throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
     }
     const sessionStatus = parsedSessionStatus.data;
+    if (sessionStatus === 'completed' && session.key_delivered_at !== null &&
+        !isCanonicalPersistedDeliveryTimestamp(session.key_delivered_at)) {
+      throw new AppError(
+        500,
+        'invalid_session_delivery_state',
+        'Persisted CLI session delivery timestamp is invalid'
+      );
+    }
     if (sessionStatus === 'pending') {
       await assertCliSessionUnexpired(client, session.session_code);
       const pendingResponse = IdentityCliSessionPollSchema.parse({ status: 'pending' });
