@@ -10,6 +10,7 @@ import {
   IdentityCliSessionCreateSchema,
   IdentityCliSessionCreatedSchema,
   IdentityCliSessionPollSchema,
+  IdentityCliSessionCodeSchema,
   IdentityCliSessionStatusSchema,
   IdentityEndUserIssuerSchema,
   IdentityEndUserSubjectSchema,
@@ -571,6 +572,10 @@ export async function authorizeCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    const parsedSessionCode = IdentityCliSessionCodeSchema.safeParse(session.session_code);
+    if (!parsedSessionCode.success || parsedSessionCode.data !== routeCode) {
+      throw new AppError(500, 'invalid_session_code', 'Persisted CLI session code is invalid');
+    }
     const parsedSessionStatus = IdentityCliSessionStatusSchema.safeParse(session.status);
     if (!parsedSessionStatus.success) {
       throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
@@ -757,6 +762,9 @@ export async function pollCliSessionHandler(
     );
     const session = selected.rows[0];
     if (!session) throw new AppError(404, 'session_not_found', 'CLI session was not found');
+    if (!IdentityCliSessionCodeSchema.safeParse(session.session_code).success) {
+      throw new AppError(500, 'invalid_session_code', 'Persisted CLI session code is invalid');
+    }
     const parsedSessionStatus = IdentityCliSessionStatusSchema.safeParse(session.status);
     if (!parsedSessionStatus.success) {
       throw new AppError(500, 'invalid_session_status', 'Persisted CLI session status is invalid');
