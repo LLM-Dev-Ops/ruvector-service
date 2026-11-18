@@ -5,6 +5,7 @@ import {
   IdentityApiKeyLookupSchema,
   IdentityApiKeyHashSchema,
   IdentityApiKeyIdSchema,
+  IdentityApiKeyNameSchema,
   IdentityApiKeyResponseSchema,
   IdentityCliSessionAuthorizeSchema,
   IdentityCliSessionAuthorizedSchema,
@@ -286,6 +287,7 @@ async function lockActiveApiKey(
     !key ||
     !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
     !IdentityApiKeyHashSchema.safeParse(key.key_hash).success ||
+    !IdentityApiKeyNameSchema.safeParse(key.name).success ||
     !isCurrentScopeList(key.scopes)
   ) return undefined;
 
@@ -327,6 +329,7 @@ async function lockActiveApiKeyByHash(
     !key ||
     !IdentityApiKeyIdSchema.safeParse(key.key_id).success ||
     !IdentityOrganizationIdSchema.safeParse(key.organization_id).success ||
+    !IdentityApiKeyNameSchema.safeParse(key.name).success ||
     !isCurrentScopeList(key.scopes)
   ) return undefined;
   return await isLockedApiKeyActive(client, key.key_id, key.organization_id) ? key : undefined;
