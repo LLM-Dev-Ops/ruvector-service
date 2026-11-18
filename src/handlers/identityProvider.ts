@@ -543,6 +543,16 @@ export async function authorizeCliSessionHandler(
       );
     }
     const membership = membershipResult.rows[0];
+    const membershipIssuer = IdentityEndUserIssuerSchema.safeParse(membership.issuer);
+    const membershipSubject = IdentityEndUserSubjectSchema.safeParse(membership.subject);
+    if (!membershipIssuer.success || membershipIssuer.data !== user.issuer
+      || !membershipSubject.success || membershipSubject.data !== user.subject) {
+      throw new AppError(
+        403,
+        'identity_membership_mismatch',
+        'Verified user identity does not match tenant membership'
+      );
+    }
     if (!IdentityOrganizationIdSchema.safeParse(membership.organization_id).success) {
       throw new AppError(
         403,

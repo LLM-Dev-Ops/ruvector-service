@@ -2414,6 +2414,32 @@ describe('IAM-scoped identity provider', () => {
     }
   });
 
+  it('fails closed when a locked membership row is bound to another identity', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM data_plane_identity_memberships')) return { rows: [{
+          issuer: 'https://identity.test/auth/v1', subject: 'user-2', organization_id: 'org-test',
+          email: 'owner@example.test', payment_status: 'paid', role: 'owner',
+        }] };
+        if (sql.includes('FROM data_plane_cli_sessions')) return { rows: [] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    await expect(authorizeCliSessionHandler({
+      params: { session_code: 'ABCDEFGH' }, body: { session_code: 'ABCDEFGH' },
+      headers: { authorization: 'Bearer jwt' },
+    } as unknown as Request, response(), { getClient: jest.fn().mockResolvedValue(client) } as never,
+    async () => ({ issuer: 'https://identity.test/auth/v1', subject: 'user-1', email: null })))
+      .rejects.toMatchObject({ statusCode: 403, code: 'identity_membership_mismatch' });
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(client.query.mock.calls.some(([sql]) =>
+      String(sql).includes('FROM data_plane_cli_sessions'))).toBe(false);
+  });
+
   it('replays a completed authorization idempotently for the same tenant', async () => {
     const client = {
       query: jest.fn(async (sql: string) => {
